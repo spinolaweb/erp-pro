@@ -1,4 +1,3 @@
-cat > src/components/LivePreview.jsx << 'EOF'
 import { formatCurrency, formatNumber } from '../utils/calculator';
 import { Badge } from './ui/Badge';
 
@@ -101,4 +100,3 @@ export function LivePreview({ metrics, exchangeRate }) {
     </div>
   );
 }
-EOF
