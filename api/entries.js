@@ -52,7 +52,7 @@ router.post('/', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     const db = getDb();
-n    await db.query('DELETE FROM entries WHERE id = $1', [req.params.id]);
+    await db.query('DELETE FROM entries WHERE id = $1', [req.params.id]);
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
