@@ -69,4 +69,6 @@ export function formatCurrency(num, currency = 'DZD') {
   const formatted = new Intl.NumberFormat('fr-FR', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
-  }).format
+  }).format(num);
+  return currency === 'USD' ? `${symbol}${formatted}` : `${formatted} ${symbol}`;
+}
