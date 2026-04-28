@@ -21,10 +21,8 @@ const PORT = process.env.PORT || 3001;
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-// Initialize DB
 initDatabase();
 
-// API Routes
 app.use('/api/auth', authRouter);
 app.use('/api/entries', entriesRouter);
 app.use('/api/settings', settingsRouter);
@@ -34,14 +32,11 @@ app.use('/api/customers', customersRouter);
 app.use('/api/campaigns', campaignsRouter);
 app.use('/api/backup', backupRouter);
 
-// Serve static files from React build
 app.use(express.static(path.join(__dirname, 'src/dist')));
 
-// Serve React app for all non-API routes
-app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'src/dist/index.html'));
 });
 
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`Server running on port ${PORT}`);
 });
