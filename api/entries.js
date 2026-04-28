@@ -1,4 +1,3 @@
-cat > api/entries.js << 'EOF'
 import { Router } from 'express';
 import { getDb } from './db.js';
 
@@ -15,7 +14,7 @@ router.get('/', async (req, res) => {
     if (startDate) { conditions.push('date >= $' + (params.length + 1)); params.push(startDate); }
     if (endDate) { conditions.push('date <= $' + (params.length + 1)); params.push(endDate); }
     if (campaign) { conditions.push('campaign = $' + (params.length + 1)); params.push(campaign); }
-    if (search) { conditions.push('(campaign ILIKE $' + (params.length + 1) + ' OR notes ILIKE $' + (params.length + 2) + ')'); params.push(`%${search}%`, `%${search}%`); }
+    if (search) { conditions.push('(campaign ILIKE $' + (params.length + 1) + ' OR notes ILIKE $' + (params.length + 2) + ')'); params.push('%' + search + '%', '%' + search + '%'); }
     
     if (conditions.length) sql += ' AND ' + conditions.join(' AND ');
     sql += ' ORDER BY date DESC, created_at DESC';
@@ -72,4 +71,3 @@ router.delete('/bulk/delete', async (req, res) => {
 });
 
 export default router;
-EOF

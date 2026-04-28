@@ -1,4 +1,3 @@
-cat > api/db.js << 'EOF'
 import pg from 'pg';
 const { Pool } = pg;
 
@@ -85,10 +84,9 @@ export async function initDatabase() {
   `);
   
   client.release();
-  console.log('✅ PostgreSQL initialized');
+  console.log('PostgreSQL initialized');
 }
 
 export function getDb() {
   return pool;
 }
-EOF
