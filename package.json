@@ -3,10 +3,10 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently "npm run server" "npm run client"",
+    "dev": "concurrently npm:server npm:client",
     "server": "nodemon server.js",
     "client": "cd src && npm run dev",
-    "build": "cd src && npm run build",
+    "build": "cd src && npm install && npm run build",
     "start": "node server.js",
     "postinstall": "cd src && npm install"
   },
