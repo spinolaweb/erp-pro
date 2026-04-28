@@ -1,3 +1,4 @@
+cat > src/components/LivePreview.jsx << 'EOF'
 import { formatCurrency, formatNumber } from '../utils/calculator';
 import { Badge } from './ui/Badge';
 
@@ -88,7 +89,8 @@ export function LivePreview({ metrics, exchangeRate }) {
           </div>
           <div className="bg-white p-2 rounded text-center">
             <p className="text-xs text-gray-500">CPR CAP</p>
-            <p className="font-bold text-sm tabular-nums">{formatNumber(metrics.cpr_cap_dzd, 0)} DZD</p>
+            <p className="font-bold text-sm tabular-nums text-blue-600">${formatNumber(metrics.cpr_cap_usd, 2)}</p>
+            <p className="text-xs text-gray-400">{formatNumber(metrics.cpr_cap_dzd, 0)} DZD</p>
           </div>
           <div className="bg-white p-2 rounded text-center">
             <p className="text-xs text-gray-500">CPC</p>
@@ -99,3 +101,4 @@ export function LivePreview({ metrics, exchangeRate }) {
     </div>
   );
 }
+EOF
