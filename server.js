@@ -34,6 +34,7 @@ app.use('/api/backup', backupRouter);
 
 app.use(express.static(path.join(__dirname, 'src/dist')));
 
+app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'src/dist/index.html'));
 });
 
