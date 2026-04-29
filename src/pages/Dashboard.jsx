@@ -27,7 +27,6 @@ export function Dashboard() {
   const recentEntries = entries?.slice(0, 5) || [];
 
   useEffect(() => {
-    fetch(`${API_URL}/api/products`).then(r => r.json()).then(setProducts);
   }, []);
 
   return (

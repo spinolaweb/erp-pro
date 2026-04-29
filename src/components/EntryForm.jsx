@@ -23,9 +23,7 @@ export function EntryForm({ settings, onSuccess }) {
   const [campaigns, setCampaigns] = useState([]);
   const [notes, setNotes] = useState('');
   const [toast, setToast] = useState(null);
-  const [products, setProducts] = useState([]);
   useEffect(() => {
-    fetch(`${API_URL}/api/products`).then(r => r.json()).then(setProducts);
   }, []);
   const [saving, setSaving] = useState(false);
 

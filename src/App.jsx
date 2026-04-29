@@ -1,15 +1,15 @@
 import { Routes, Route } from 'react-router-dom';
 import { Sidebar } from './components/Sidebar';
 import { Header } from './components/Header';
-import { Dashboard } from './pages/Dashboard';;
-import { Entry } from './pages/Entry';;
-import { History } from './pages/History';;
-import { Analytics } from './pages/Analytics';;
-import Products from './pages/Products';;
-import { Suppliers } from './pages/Suppliers';;
-import { Customers } from './pages/Customers';;
-import { Settings } from './pages/Settings';;
-import BreakEvenCalculator from './pages/BreakEvenCalculator';;
+import { Dashboard } from './pages/Dashboard';
+import { Entry } from './pages/Entry';
+import { History } from './pages/History';
+import { Analytics } from './pages/Analytics';
+import Products from './pages/Products';
+import { Suppliers } from './pages/Suppliers';
+import { Customers } from './pages/Customers';
+import { Settings } from './pages/Settings';
+import BreakEvenCalculator from './pages/BreakEvenCalculator';
 
 function App() {
   return (

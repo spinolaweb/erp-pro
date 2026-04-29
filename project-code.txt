@@ -1,0 +1,4230 @@
+=== ERP-PRO CODEBASE DUMP ===
+
+
+
+=========================================
+📁 FILE: api/auth.js
+=========================================
+
+import { Router } from 'express';
+import jwt from 'jsonwebtoken';
+import bcrypt from 'bcryptjs';
+const router = Router();
+const JWT_SECRET = process.env.JWT_SECRET || 'fallback-secret';
+const USERS = [{ username: 'admin', password: bcrypt.hashSync('admin123', 10) }];
+
+router.post('/login', async (req, res) => {
+  const { username, password } = req.body;
+  const user = USERS.find(u => u.username === username);
+  if (!user || !bcrypt.compareSync(password, user.password)) {
+    return res.status(401).json({ error: 'Invalid credentials' });
+  }
+  const token = jwt.sign({ username }, JWT_SECRET, { expiresIn: '24h' });
+  res.json({ token, username });
+});
+
+export default router;
+
+
+=========================================
+📁 FILE: api/backup.js
+=========================================
+
+import { Router } from 'express';
+import fs from 'fs';
+const router = Router();
+const DB_PATH = process.env.DB_PATH || './database.sqlite';
+
+router.get('/download', (req, res) => {
+  if (fs.existsSync(DB_PATH)) {
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', 'attachment; filename=database_backup.sqlite');
+    fs.createReadStream(DB_PATH).pipe(res);
+  } else {
+    res.status(404).json({ error: 'Database file not found' });
+  }
+});
+
+router.post('/restore', (req, res) => {
+  res.status(501).json({ error: 'Use file upload endpoint with multipart/form-data' });
+});
+
+export default router;
+
+
+=========================================
+📁 FILE: api/campaigns.js
+=========================================
+
+import { Router } from 'express';
+import { getDb } from './db.js';
+const router = Router();
+
+router.get('/', async (req, res) => {
+  try {
+    const db = getDb();
+    const result = await db.query('SELECT * FROM campaigns ORDER BY created_at DESC');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/', async (req, res) => {
+  try {
+    const db = getDb();
+    const { name, platform, budget_usd, start_date, end_date } = req.body;
+    const result = await db.query('INSERT INTO campaigns (name, platform, budget_usd, start_date, end_date) VALUES ($1, $2, $3, $4, $5) RETURNING *', [name, platform, budget_usd, start_date, end_date]);
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+export default router;
+
+
+=========================================
+📁 FILE: api/customers.js
+=========================================
+
+import { Router } from 'express';
+import { getDb } from './db.js';
+const router = Router();
+
+router.get('/', async (req, res) => {
+  try {
+    const db = getDb();
+    const result = await db.query('SELECT * FROM customers ORDER BY total_spent_dzd DESC');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/', async (req, res) => {
+  try {
+    const db = getDb();
+    const { name, phone, wilaya, address } = req.body;
+    const result = await db.query('INSERT INTO customers (name, phone, wilaya, address) VALUES ($1, $2, $3, $4) RETURNING *', [name, phone, wilaya, address]);
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+export default router;
+
+
+=========================================
+📁 FILE: api/db.js
+=========================================
+
+import pg from 'pg';
+const { Pool } = pg;
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
+
+export async function initDatabase() {
+  const client = await pool.connect();
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      exchange_rate REAL DEFAULT 250,
+      business_name TEXT DEFAULT 'Mon Entreprise',
+      default_price REAL DEFAULT 4900,
+      default_cost REAL DEFAULT 3400,
+      default_confirmation REAL DEFAULT 70,
+      default_delivery REAL DEFAULT 70,
+      dark_mode INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS entries (
+      id SERIAL PRIMARY KEY,
+      date TEXT NOT NULL,
+      campaign TEXT,
+      orders INTEGER NOT NULL,
+      confirmation_rate REAL NOT NULL,
+      delivery_rate REAL NOT NULL,
+      ad_spend_usd REAL NOT NULL,
+      cpr_usd REAL,
+      clicks INTEGER DEFAULT 0,
+      selling_price_dzd REAL NOT NULL,
+      product_cost_dzd REAL NOT NULL,
+      notes TEXT,
+      product_id INTEGER,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS products (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      selling_price_dzd REAL NOT NULL,
+      cost_price_dzd REAL NOT NULL,
+      stock_quantity INTEGER DEFAULT 0,
+      supplier_id INTEGER,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS suppliers (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      phone TEXT,
+      address TEXT,
+      wilaya TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS customers (
+      id SERIAL PRIMARY KEY,
+      name TEXT,
+      phone TEXT UNIQUE,
+      wilaya TEXT,
+      address TEXT,
+      orders_count INTEGER DEFAULT 0,
+      total_spent_dzd REAL DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS campaigns (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      platform TEXT,
+      budget_usd REAL,
+      start_date TEXT,
+      end_date TEXT,
+      active INTEGER DEFAULT 1,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    INSERT INTO settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+    CREATE TABLE IF NOT EXISTS inventory_purchases (
+      id SERIAL PRIMARY KEY,
+      product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
+      quantity INTEGER NOT NULL,
+      cost_price_dzd REAL NOT NULL,
+      total_cost_dzd REAL NOT NULL,
+      purchase_date TEXT,
+      supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+  `);
+  client.release();
+  console.log('PostgreSQL initialized');
+}
+
+export function getDb() {
+  return pool;
+}
+
+
+=========================================
+📁 FILE: api/entries.js
+=========================================
+
+import { Router } from 'express';
+import { getDb } from './db.js';
+const router = Router();
+
+router.get('/', async (req, res) => {
+  try {
+    const db = getDb();
+    const { startDate, endDate, campaign, search } = req.query;
+    let sql = 'SELECT * FROM entries WHERE 1=1';
+    const params = [];
+    const conditions = [];
+    if (startDate) { conditions.push('date >= $' + (params.length + 1)); params.push(startDate); }
+    if (endDate) { conditions.push('date <= $' + (params.length + 1)); params.push(endDate); }
+    if (campaign) { conditions.push('campaign = $' + (params.length + 1)); params.push(campaign); }
+    if (search) { conditions.push('(campaign ILIKE $' + (params.length + 1) + ' OR notes ILIKE $' + (params.length + 2) + ')'); params.push('%' + search + '%', '%' + search + '%'); }
+    if (conditions.length) sql += ' AND ' + conditions.join(' AND ');
+    sql += ' ORDER BY date DESC, created_at DESC';
+    const result = await db.query(sql, params);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/', async (req, res) => {
+  try {
+    const db = getDb();
+    const { date, campaign, orders, confirmation_rate, delivery_rate, ad_spend_usd, cpr_usd, clicks, selling_price_dzd, product_cost_dzd, notes, product_id } = req.body;
+    const calculatedCpr = orders > 0 ? ad_spend_usd / orders : 0;
+    const result = await db.query(
+      'INSERT INTO entries (date, campaign, orders, confirmation_rate, delivery_rate, ad_spend_usd, cpr_usd, clicks, selling_price_dzd, product_cost_dzd, notes, product_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *',
+      [date, campaign, orders, confirmation_rate, delivery_rate, ad_spend_usd, cpr_usd || calculatedCpr, clicks || 0, selling_price_dzd, product_cost_dzd, notes, product_id]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/:id', async (req, res) => {
+  try {
+    const db = getDb();
+    await db.query('DELETE FROM entries WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/bulk/delete', async (req, res) => {
+  try {
+    const db = getDb();
+    const { ids } = req.body;
+    const placeholders = ids.map((_, i) => '$' + (i + 1)).join(',');
+    await db.query('DELETE FROM entries WHERE id IN (' + placeholders + ')', ids);
+    res.json({ success: true, deleted: ids.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+export default router;
+
+
+=========================================
+📁 FILE: api/inventory.js
+=========================================
+
+import { Router } from 'express';
+import { getDb } from './db.js';
+const router = Router();
+
+router.get('/', async (req, res) => {
+  try {
+    const db = getDb();
+    const result = await db.query(`
+      SELECT ip.*, p.name as product_name, s.name as supplier_name 
+      FROM inventory_purchases ip
+      LEFT JOIN products p ON ip.product_id = p.id
+      LEFT JOIN suppliers s ON ip.supplier_id = s.id
+      ORDER BY ip.purchase_date DESC, ip.created_at DESC
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/product/:productId', async (req, res) => {
+  try {
+    const db = getDb();
+    const result = await db.query(`
+      SELECT ip.*, s.name as supplier_name 
+      FROM inventory_purchases ip
+      LEFT JOIN suppliers s ON ip.supplier_id = s.id
+      WHERE ip.product_id = $1
+      ORDER BY ip.purchase_date DESC
+    `, [req.params.productId]);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/', async (req, res) => {
+  try {
+    const db = getDb();
+    const { product_id, quantity, cost_price_dzd, purchase_date, supplier_id, notes } = req.body;
+    const total_cost_dzd = quantity * cost_price_dzd;
+    const result = await db.query(
+      `INSERT INTO inventory_purchases 
+       (product_id, quantity, cost_price_dzd, total_cost_dzd, purchase_date, supplier_id, notes) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [product_id, quantity, cost_price_dzd, total_cost_dzd, purchase_date, supplier_id, notes]
+    );
+    await db.query(
+      `UPDATE products SET stock_quantity = stock_quantity + $1, cost_price_dzd = $2 WHERE id = $3`,
+      [quantity, cost_price_dzd, product_id]
+    );
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/:id', async (req, res) => {
+  try {
+    const db = getDb();
+    const purchase = await db.query('SELECT * FROM inventory_purchases WHERE id = $1', [req.params.id]);
+    if (purchase.rows.length === 0) return res.status(404).json({ error: 'Not found' });
+    const { product_id, quantity } = purchase.rows[0];
+    await db.query('DELETE FROM inventory_purchases WHERE id = $1', [req.params.id]);
+    await db.query(
+      'UPDATE products SET stock_quantity = GREATEST(0, stock_quantity - $1) WHERE id = $2',
+      [quantity, product_id]
+    );
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+export default router;
+
+=========================================
+📁 FILE: api/products.js
+=========================================
+
+import { Router } from 'express';
+import { getDb } from './db.js';
+const router = Router();
+
+router.get('/', async (req, res) => {
+  try {
+    const db = getDb();
+    const result = await db.query(`
+      SELECT 
+        p.*, 
+        s.name as supplier_name,
+        COALESCE(SUM(ip.quantity), 0) as total_purchased,
+        COALESCE(SUM(ip.total_cost_dzd), 0) as total_inventory_investment,
+        COALESCE((
+          SELECT SUM(e.orders * e.confirmation_rate / 100.0 * e.delivery_rate / 100.0) 
+          FROM entries e 
+          WHERE e.product_id = p.id
+        ), 0) as total_delivered,
+        COALESCE(SUM(ip.quantity), 0) - COALESCE((
+          SELECT SUM(e.orders * e.confirmation_rate / 100.0 * e.delivery_rate / 100.0) 
+          FROM entries e 
+          WHERE e.product_id = p.id
+        ), 0) as remaining_stock
+      FROM products p
+      LEFT JOIN suppliers s ON p.supplier_id = s.id
+      LEFT JOIN inventory_purchases ip ON ip.product_id = p.id
+      GROUP BY p.id, s.name
+      ORDER BY p.created_at DESC
+    `);
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/', async (req, res) => {
+  try {
+    const db = getDb();
+    const { name, selling_price_dzd, cost_price_dzd, stock_quantity, supplier_id } = req.body;
+    const result = await db.query('INSERT INTO products (name, selling_price_dzd, cost_price_dzd, stock_quantity, supplier_id) VALUES ($1, $2, $3, $4, $5) RETURNING *', [name, selling_price_dzd, cost_price_dzd, stock_quantity || 0, supplier_id]);
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/:id', async (req, res) => {
+  try {
+    const db = getDb();
+    const { name, selling_price_dzd, cost_price_dzd, stock_quantity, supplier_id } = req.body;
+    await db.query('UPDATE products SET name = $1, selling_price_dzd = $2, cost_price_dzd = $3, stock_quantity = $4, supplier_id = $5 WHERE id = $6', [name, selling_price_dzd, cost_price_dzd, stock_quantity, supplier_id, req.params.id]);
+    const result = await db.query('SELECT * FROM products WHERE id = $1', [req.params.id]);
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/:id', async (req, res) => {
+  try {
+    const db = getDb();
+    await db.query('DELETE FROM products WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+export default router;
+
+
+=========================================
+📁 FILE: api/settings.js
+=========================================
+
+import { Router } from 'express';
+import { getDb } from './db.js';
+const router = Router();
+
+router.get('/', async (req, res) => {
+  try {
+    const db = getDb();
+    const result = await db.query('SELECT * FROM settings WHERE id = 1');
+    res.json(result.rows[0] || { id: 1, exchange_rate: 250, business_name: 'Mon Entreprise', default_price: 4900, default_cost: 3400, default_confirmation: 70, default_delivery: 70, dark_mode: 0 });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/', async (req, res) => {
+  try {
+    const db = getDb();
+    const { exchange_rate, business_name, default_price, default_cost, default_confirmation, default_delivery, dark_mode } = req.body;
+    await db.query(
+      'INSERT INTO settings (id, exchange_rate, business_name, default_price, default_cost, default_confirmation, default_delivery, dark_mode) VALUES (1, $1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO UPDATE SET exchange_rate = EXCLUDED.exchange_rate, business_name = EXCLUDED.business_name, default_price = EXCLUDED.default_price, default_cost = EXCLUDED.default_cost, default_confirmation = EXCLUDED.default_confirmation, default_delivery = EXCLUDED.default_delivery, dark_mode = EXCLUDED.dark_mode',
+      [exchange_rate, business_name, default_price, default_cost, default_confirmation, default_delivery, dark_mode]
+    );
+    const result = await db.query('SELECT * FROM settings WHERE id = 1');
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+export default router;
+
+
+=========================================
+📁 FILE: api/suppliers.js
+=========================================
+
+import { Router } from 'express';
+import { getDb } from './db.js';
+const router = Router();
+
+router.get('/', async (req, res) => {
+  try {
+    const db = getDb();
+    const result = await db.query('SELECT * FROM suppliers ORDER BY name');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/', async (req, res) => {
+  try {
+    const db = getDb();
+    const { name, phone, address, wilaya } = req.body;
+    const result = await db.query('INSERT INTO suppliers (name, phone, address, wilaya) VALUES ($1, $2, $3, $4) RETURNING *', [name, phone, address, wilaya]);
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/:id', async (req, res) => {
+  try {
+    const db = getDb();
+    await db.query('DELETE FROM suppliers WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+export default router;
+
+
+=========================================
+📁 FILE: backup_20260429_164603/BreakEvenCalculator.jsx
+=========================================
+
+import { useState } from 'react';
+import { Input } from '../components/ui/Input';
+import { formatNumber } from '../utils/calculator';
+import { Calculator } from 'lucide-react';
+
+export function BreakEvenCalculator() {
+  const [values, setValues] = useState({
+    selling_price: 4900,
+    product_cost: 3400,
+    ad_spend: 100,
+    confirmation_rate: 70,
+    delivery_rate: 70,
+    target_profit: 0
+  });
+
+  const cprCap = values.selling_price - values.product_cost;
+  const breakEvenROAS = cprCap > 0 ? values.selling_price / cprCap : 0;
+
+  const profitPerDelivered = cprCap;
+  const deliveredNeeded = profitPerDelivered > 0 ? (values.target_profit + values.ad_spend * 250) / profitPerDelivered : 0;
+  const confirmedNeeded = values.delivery_rate > 0 ? deliveredNeeded / (values.delivery_rate / 100) : 0;
+  const ordersNeeded = values.confirmation_rate > 0 ? confirmedNeeded / (values.confirmation_rate / 100) : 0;
+
+  return (
+    <div className="p-6 max-w-3xl mx-auto space-y-6">
+      <div className="card">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="p-3 bg-blue-100 rounded-lg">
+            <Calculator className="w-6 h-6 text-blue-600" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Calculateur Seuil de Rentabilité</h2>
+            <p className="text-sm text-gray-500">Combien de commandes pour être rentable ?</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 mb-6">
+          <Input label="Prix de Vente (DZD)" type="number" value={values.selling_price} onChange={e => setValues({...values, selling_price: Number(e.target.value)})} />
+          <Input label="Coût Produit (DZD)" type="number" value={values.product_cost} onChange={e => setValues({...values, product_cost: Number(e.target.value)})} />
+          <Input label="Dépenses Pub (USD)" type="number" value={values.ad_spend} onChange={e => setValues({...values, ad_spend: Number(e.target.value)})} />
+          <Input label="Confirmation %" type="number" value={values.confirmation_rate} onChange={e => setValues({...values, confirmation_rate: Number(e.target.value)})} />
+          <Input label="Livraison %" type="number" value={values.delivery_rate} onChange={e => setValues({...values, delivery_rate: Number(e.target.value)})} />
+          <Input label="Profit Cible (DZD)" type="number" value={values.target_profit} onChange={e => setValues({...values, target_profit: Number(e.target.value)})} />
+        </div>
+
+        <div className="bg-slate-50 rounded-xl p-6 space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-white p-4 rounded-lg">
+              <p className="text-sm text-gray-500">CPR CAP (Marge)</p>
+              <p className="text-2xl font-bold text-blue-600 tabular-nums">{formatNumber(cprCap, 0)} DZD</p>
+            </div>
+            <div className="bg-white p-4 rounded-lg">
+              <p className="text-sm text-gray-500">Break Even ROAS</p>
+              <p className="text-2xl font-bold text-amber-600 tabular-nums">{formatNumber(breakEvenROAS, 2)}x</p>
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-lg border-2 border-emerald-200">
+            <p className="text-sm text-gray-500 mb-2">Commandes nécessaires pour {values.target_profit > 0 ? `un profit de ${formatNumber(values.target_profit, 0)} DZD` : 'le seuil de rentabilité'}</p>
+            <div className="flex items-baseline gap-2">
+              <span className="text-4xl font-bold text-emerald-600 tabular-nums">{Math.ceil(ordersNeeded)}</span>
+              <span className="text-gray-500">commandes</span>
+            </div>
+            <p className="text-sm text-gray-500 mt-2">
+              → {formatNumber(confirmedNeeded, 1)} confirmées → {formatNumber(deliveredNeeded, 1)} livrées
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+=========================================
+📁 FILE: backup_20260429_164603/Dashboard.jsx
+=========================================
+
+import { useEffect } from 'react';
+import { useApi } from '../hooks/useApi';
+import { useSettings } from '../hooks/useSettings';
+import { KPICard } from '../components/KPICard';
+import { DataTable } from '../components/DataTable';
+import { RevenueChart } from '../components/Charts/RevenueChart';
+import { calculateCOD, formatNumber } from '../utils/calculator';
+import { ShoppingCart, TrendingUp, DollarSign } from 'lucide-react';
+
+export function Dashboard() {
+  const { data: entries, fetch: fetchEntries, loading } = useApi('/api/entries');
+  const { settings } = useSettings();
+  const exchangeRate = settings?.exchange_rate || 250;
+
+  useEffect(() => { fetchEntries(); }, []);
+
+  const totals = entries?.reduce((acc, entry) => {
+    const m = calculateCOD(entry, exchangeRate);
+    acc.orders += entry.orders;
+    acc.delivered += m.livrees;
+    acc.revenue += m.revenu_dzd;
+    acc.profit += m.profit_net_dzd;
+    acc.adSpend += m.depenses_pub_usd;
+    return acc;
+  }, { orders: 0, delivered: 0, revenue: 0, profit: 0, adSpend: 0 }) || { orders: 0, delivered: 0, revenue: 0, profit: 0, adSpend: 0 };
+
+  const recentEntries = entries?.slice(0, 5) || [];
+
+  return (
+    <div className="p-6 space-y-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <KPICard 
+          title="Commandes Totales" 
+          value={totals.orders} 
+          subtitle={`${formatNumber(totals.delivered, 0)} livrées`}
+        />
+        <KPICard 
+          title="Revenus (DZD)" 
+          value={totals.revenue} 
+          isCurrency 
+          currency="DZD"
+          type="info"
+        />
+        <KPICard 
+          title="Profit Net (DZD)" 
+          value={totals.profit} 
+          isCurrency 
+          currency="DZD"
+          type={totals.profit >= 0 ? 'profit' : 'loss'}
+        />
+        <KPICard 
+          title="ROAS Moyen" 
+          value={totals.adSpend > 0 ? (totals.revenue / exchangeRate) / totals.adSpend : 0} 
+          suffix="x"
+          type={totals.adSpend > 0 && (totals.revenue / exchangeRate) / totals.adSpend >= 3 ? 'profit' : 'warning'}
+        />
+      </div>
+
+      <div className="grid lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2">
+          <RevenueChart data={entries || []} exchangeRate={exchangeRate} />
+        </div>
+        <div className="card">
+          <h3 className="font-bold text-lg mb-4">Répartition des Coûts</h3>
+          {entries?.length > 0 && (
+            <div className="space-y-4">
+              {(() => {
+                const totalCost = totals.delivered * (entries[0]?.product_cost_dzd || 3400) + totals.adSpend * exchangeRate;
+                const productCost = totals.delivered * (entries[0]?.product_cost_dzd || 3400);
+                const adCost = totals.adSpend * exchangeRate;
+                return (
+                  <>
+                    <div>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span>Coût Produit</span>
+                        <span className="font-medium">{formatNumber((productCost/totalCost)*100, 1)}%</span>
+                      </div>
+                      <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                        <div className="h-full bg-amber-500" style={{ width: `${(productCost/totalCost)*100}%` }} />
+                      </div>
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span>Publicité</span>
+                        <span className="font-medium">{formatNumber((adCost/totalCost)*100, 1)}%</span>
+                      </div>
+                      <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                        <div className="h-full bg-red-500" style={{ width: `${(adCost/totalCost)*100}%` }} />
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div>
+        <h3 className="font-bold text-lg mb-4">Entrées Récentes</h3>
+        <DataTable 
+          data={recentEntries} 
+          exchangeRate={exchangeRate} 
+          loading={loading}
+          onDelete={() => {}}
+          onBulkDelete={() => {}}
+        />
+      </div>
+    </div>
+  );
+}
+
+
+=========================================
+📁 FILE: backup_20260429_164603/EntryForm.jsx
+=========================================
+
+import { useState, useEffect } from 'react';
+import { Input } from './ui/Input';
+import { Button } from './ui/Button';
+import { useCalculator } from '../hooks/useCalculator';
+import { LivePreview } from './LivePreview';
+import { api } from '../hooks/useApi';
+import { Toast } from './ui/Toast';
+
+export function EntryForm({ settings, onSuccess }) {
+  const exchangeRate = settings?.exchange_rate || 250;
+  const { values, updateValue, metrics, setValues } = useCalculator({
+    orders: 0,
+    confirmation_rate: settings?.default_confirmation || 70,
+    delivery_rate: settings?.default_delivery || 70,
+    ad_spend_usd: 0,
+    clicks: 0,
+    selling_price_dzd: settings?.default_price || 4900,
+    product_cost_dzd: settings?.default_cost || 3400
+  }, exchangeRate);
+
+  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [campaign, setCampaign] = useState('');
+  const [campaigns, setCampaigns] = useState([]);
+  const [notes, setNotes] = useState('');
+  const [toast, setToast] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    loadCampaigns();
+  }, []);
+
+  const loadCampaigns = async () => {
+    try {
+      const res = await api.get('/api/campaigns');
+      setCampaigns(res.data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await api.post('/api/entries', {
+        date,
+        campaign,
+        ...values,
+        notes
+      });
+      setToast({ message: 'Entrée enregistrée avec succès !', type: 'success' });
+      setValues({
+        orders: 0, confirmation_rate: 70, delivery_rate: 70,
+        ad_spend_usd: 0, clicks: 0,
+        selling_price_dzd: settings?.default_price || 4900,
+        product_cost_dzd: settings?.default_cost || 3400
+      });
+      setCampaign('');
+      setNotes('');
+      onSuccess?.();
+    } catch (err) {
+      setToast({ message: 'Erreur lors de l\'enregistrement', type: 'error' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="grid lg:grid-cols-2 gap-8">
+      {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <div className="card">
+          <h3 className="font-bold text-lg mb-4">Informations Générales</h3>
+          <div className="grid grid-cols-2 gap-4">
+            <Input 
+              label="Date" 
+              type="date" 
+              value={date} 
+              onChange={e => setDate(e.target.value)} 
+              required 
+            />
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Campagne</label>
+              <input 
+                list="campaigns"
+                className="input-field"
+                value={campaign}
+                onChange={e => setCampaign(e.target.value)}
+                placeholder="Nom de la campagne"
+              />
+              <datalist id="campaigns">
+                {campaigns.map(c => <option key={c.id} value={c.name} />)}
+              </datalist>
+            </div>
+          </div>
+        </div>
+
+        <div className="card">
+          <h3 className="font-bold text-lg mb-4">Métriques de Commande</h3>
+          <div className="grid grid-cols-2 gap-4">
+            <Input 
+              label="Nombre de Commandes" 
+              type="number" 
+              min="0"
+              value={values.orders || ''} 
+              onChange={e => updateValue('orders', e.target.value)} 
+              required 
+            />
+            <Input 
+              label="Nombre de Clicks" 
+              type="number" 
+              min="0"
+              value={values.clicks || ''} 
+              onChange={e => updateValue('clicks', e.target.value)} 
+            />
+            <Input 
+              label="Taux de Confirmation %" 
+              type="number" 
+              min="0" max="100" step="0.1"
+              value={values.confirmation_rate || ''} 
+              onChange={e => updateValue('confirmation_rate', e.target.value)} 
+            />
+            <Input 
+              label="Taux de Livraison %" 
+              type="number" 
+              min="0" max="100" step="0.1"
+              value={values.delivery_rate || ''} 
+              onChange={e => updateValue('delivery_rate', e.target.value)} 
+            />
+          </div>
+        </div>
+
+        <div className="card">
+          <h3 className="font-bold text-lg mb-4">Financier</h3>
+          <div className="grid grid-cols-2 gap-4">
+            <Input 
+              label="Dépenses Publicitaires (USD)" 
+              type="number" 
+              min="0" step="0.01"
+              value={values.ad_spend_usd || ''} 
+              onChange={e => updateValue('ad_spend_usd', e.target.value)} 
+            />
+            <Input 
+              label="CPR USD (auto)" 
+              type="number" 
+              step="0.01"
+              value={values.cpr_usd?.toFixed(2) || ''} 
+              readOnly 
+              className="bg-gray-100"
+            />
+            <Input 
+              label="Prix de Vente Unitaire (DZD)" 
+              type="number" 
+              min="0"
+              value={values.selling_price_dzd || ''} 
+              onChange={e => updateValue('selling_price_dzd', e.target.value)} 
+            />
+            <Input 
+              label="Coût Produit Unitaire (DZD)" 
+              type="number" 
+              min="0"
+              value={values.product_cost_dzd || ''} 
+              onChange={e => updateValue('product_cost_dzd', e.target.value)} 
+            />
+          </div>
+        </div>
+
+        <div className="card">
+          <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+          <textarea 
+            className="input-field h-20 resize-none"
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
+            placeholder="Notes optionnelles..."
+          />
+        </div>
+
+        <Button type="submit" disabled={saving} className="w-full py-3 text-lg">
+          {saving ? 'Enregistrement...' : '💾 Enregistrer l\'Entrée'}
+        </Button>
+      </form>
+
+      <div className="lg:sticky lg:top-6 h-fit">
+        <LivePreview metrics={metrics} exchangeRate={exchangeRate} />
+      </div>
+    </div>
+  );
+}
+
+
+=========================================
+📁 FILE: backup_20260429_164603/Products.jsx
+=========================================
+
+import { useState, useEffect } from 'react';
+import { useApi } from '../hooks/useApi';
+import { Input } from '../components/ui/Input';
+import { Button } from '../components/ui/Button';
+import { Badge } from '../components/ui/Badge';
+import { Toast } from '../components/ui/Toast';
+import { Package, AlertTriangle } from 'lucide-react';
+
+export function Products() {
+  const { data: products, fetch, create, remove } = useApi('/api/products');
+  const [form, setForm] = useState({ name: '', selling_price_dzd: '', cost_price_dzd: '', stock_quantity: '' });
+  const [toast, setToast] = useState(null);
+
+  useEffect(() => { fetch(); }, []);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await create(form);
+      setToast({ message: 'Produit ajouté', type: 'success' });
+      setForm({ name: '', selling_price_dzd: '', cost_price_dzd: '', stock_quantity: '' });
+      fetch();
+    } catch (err) {
+      setToast({ message: 'Erreur', type: 'error' });
+    }
+  };
+
+  return (
+    <div className="p-6 space-y-6">
+      {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+
+      <div className="card">
+        <h3 className="font-bold text-lg mb-4">Nouveau Produit</h3>
+        <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <Input label="Nom" value={form.name} onChange={e => setForm({...form, name: e.target.value})} required />
+          <Input label="Prix Vente DZD" type="number" value={form.selling_price_dzd} onChange={e => setForm({...form, selling_price_dzd: e.target.value})} required />
+          <Input label="Coût DZD" type="number" value={form.cost_price_dzd} onChange={e => setForm({...form, cost_price_dzd: e.target.value})} required />
+          <Input label="Stock" type="number" value={form.stock_quantity} onChange={e => setForm({...form, stock_quantity: e.target.value})} />
+          <div className="md:col-span-4">
+            <Button type="submit">Ajouter Produit</Button>
+          </div>
+        </form>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {products?.map(product => (
+          <div key={product.id} className="card relative">
+            {product.stock_quantity < 10 && (
+              <div className="absolute top-4 right-4">
+                <Badge variant="warning"><AlertTriangle className="w-3 h-3 mr-1" /> Stock Faible</Badge>
+              </div>
+            )}
+            <div className="flex items-start gap-3">
+              <div className="p-3 bg-blue-100 rounded-lg">
+                <Package className="w-6 h-6 text-blue-600" />
+              </div>
+              <div>
+                <h4 className="font-bold text-gray-900">{product.name}</h4>
+                <p className="text-sm text-gray-500">{product.supplier_name || 'Sans fournisseur'}</p>
+              </div>
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+              <div className="bg-gray-50 rounded p-2">
+                <p className="text-xs text-gray-500">Prix</p>
+                <p className="font-bold tabular-nums">{product.selling_price_dzd}</p>
+              </div>
+              <div className="bg-gray-50 rounded p-2">
+                <p className="text-xs text-gray-500">Coût</p>
+                <p className="font-bold tabular-nums">{product.cost_price_dzd}</p>
+              </div>
+              <div className="bg-gray-50 rounded p-2">
+                <p className="text-xs text-gray-500">Stock</p>
+                <p className={`font-bold tabular-nums ${product.stock_quantity < 10 ? 'text-red-600' : ''}`}>
+                  {product.stock_quantity}
+                </p>
+              </div>
+            </div>
+            <Button variant="danger" className="w-full mt-4" onClick={() => remove(product.id).then(fetch)}>
+              Supprimer
+            </Button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+
+=========================================
+📁 FILE: backup_20260429_164603/calculator.js
+=========================================
+
+export function calculateCOD(entry, exchangeRate = 250) {
+  const orders = Number(entry.orders) || 0;
+  const confirmationRate = Number(entry.confirmation_rate) || 0;
+  const deliveryRate = Number(entry.delivery_rate) || 0;
+  const adSpendUSD = Number(entry.ad_spend_usd) || 0;
+  const clicks = Number(entry.clicks) || 0;
+  const sellingPriceDZD = Number(entry.selling_price_dzd) || 0;
+  const productCostDZD = Number(entry.product_cost_dzd) || 0;
+
+  const confirmed = orders * (confirmationRate / 100);
+  const delivered = confirmed * (deliveryRate / 100);
+  
+  const revenueDZD = delivered * sellingPriceDZD;
+  const productCostDeliveredDZD = delivered * productCostDZD;
+  const adSpendDZD = adSpendUSD * exchangeRate;
+  
+  const profitDZD = revenueDZD - productCostDeliveredDZD - adSpendDZD;
+  const profitUSD = profitDZD / exchangeRate;
+  
+  const profitPerUnitDZD = delivered > 0 ? profitDZD / delivered : 0;
+  const profitPerUnitUSD = profitPerUnitDZD / exchangeRate;
+  
+  const cprUSD = orders > 0 ? adSpendUSD / orders : 0;
+  const cprCapDZD = sellingPriceDZD - productCostDZD;
+  const cprCapUSD = cprCapDZD / exchangeRate;
+  const breakEvenROAS = cprCapDZD > 0 ? sellingPriceDZD / cprCapDZD : 0;
+  const costPerDeliveredUSD = delivered > 0 ? adSpendUSD / delivered : 0;
+  const roas = adSpendDZD > 0 ? revenueDZD / adSpendDZD : 0;
+  const rpc = clicks > 0 ? revenueDZD / clicks : 0;
+  const cpc = clicks > 0 ? adSpendUSD / clicks : 0;
+  const effectiveDeliveryRate = orders > 0 ? (delivered / orders) * 100 : 0;
+
+  return {
+    commandes: orders,
+    confirmees: confirmed,
+    livrees: delivered,
+    revenu_dzd: revenueDZD,
+    revenu_usd: revenueDZD / exchangeRate,
+    cout_produit_dzd: productCostDeliveredDZD,
+    cout_produit_usd: productCostDeliveredDZD / exchangeRate,
+    depenses_pub_usd: adSpendUSD,
+    depenses_pub_dzd: adSpendDZD,
+    profit_net_dzd: profitDZD,
+    profit_net_usd: profitUSD,
+    profit_unite_dzd: profitPerUnitDZD,
+    profit_unite_usd: profitPerUnitUSD,
+    cpr_usd: cprUSD,
+    cpr_cap_dzd: cprCapDZD,
+    cpr_cap_usd: cprCapUSD,
+    break_even_roas: breakEvenROAS,
+    cout_par_livree_usd: costPerDeliveredUSD,
+    roas,
+    rpc,
+    cpc,
+    taux_livraison_effectif: effectiveDeliveryRate,
+    clicks
+  };
+}
+
+export function formatNumber(num, decimals = 2) {
+  return new Intl.NumberFormat('fr-FR', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals
+  }).format(num);
+}
+
+export function formatCurrency(num, currency = 'DZD') {
+  const symbol = currency === 'USD' ? '$' : 'DZD';
+  const formatted = new Intl.NumberFormat('fr-FR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(num);
+  return currency === 'USD' ? `${symbol}${formatted}` : `${formatted} ${symbol}`;
+}
+
+
+=========================================
+📁 FILE: backup_20260429_164603/db.js
+=========================================
+
+import pg from 'pg';
+const { Pool } = pg;
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
+
+export async function initDatabase() {
+  const client = await pool.connect();
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      exchange_rate REAL DEFAULT 250,
+      business_name TEXT DEFAULT 'Mon Entreprise',
+      default_price REAL DEFAULT 4900,
+      default_cost REAL DEFAULT 3400,
+      default_confirmation REAL DEFAULT 70,
+      default_delivery REAL DEFAULT 70,
+      dark_mode INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS entries (
+      id SERIAL PRIMARY KEY,
+      date TEXT NOT NULL,
+      campaign TEXT,
+      orders INTEGER NOT NULL,
+      confirmation_rate REAL NOT NULL,
+      delivery_rate REAL NOT NULL,
+      ad_spend_usd REAL NOT NULL,
+      cpr_usd REAL,
+      clicks INTEGER DEFAULT 0,
+      selling_price_dzd REAL NOT NULL,
+      product_cost_dzd REAL NOT NULL,
+      notes TEXT,
+      product_id INTEGER,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS products (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      selling_price_dzd REAL NOT NULL,
+      cost_price_dzd REAL NOT NULL,
+      stock_quantity INTEGER DEFAULT 0,
+      supplier_id INTEGER,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS suppliers (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      phone TEXT,
+      address TEXT,
+      wilaya TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS customers (
+      id SERIAL PRIMARY KEY,
+      name TEXT,
+      phone TEXT UNIQUE,
+      wilaya TEXT,
+      address TEXT,
+      orders_count INTEGER DEFAULT 0,
+      total_spent_dzd REAL DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS campaigns (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      platform TEXT,
+      budget_usd REAL,
+      start_date TEXT,
+      end_date TEXT,
+      active INTEGER DEFAULT 1,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    INSERT INTO settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+  `);
+  client.release();
+  console.log('PostgreSQL initialized');
+}
+
+export function getDb() {
+  return pool;
+}
+
+
+=========================================
+📁 FILE: backup_20260429_164603/products.js
+=========================================
+
+import { Router } from 'express';
+import { getDb } from './db.js';
+const router = Router();
+
+router.get('/', async (req, res) => {
+  try {
+    const db = getDb();
+    const result = await db.query('SELECT p.*, s.name as supplier_name FROM products p LEFT JOIN suppliers s ON p.supplier_id = s.id ORDER BY p.created_at DESC');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/', async (req, res) => {
+  try {
+    const db = getDb();
+    const { name, selling_price_dzd, cost_price_dzd, stock_quantity, supplier_id } = req.body;
+    const result = await db.query('INSERT INTO products (name, selling_price_dzd, cost_price_dzd, stock_quantity, supplier_id) VALUES ($1, $2, $3, $4, $5) RETURNING *', [name, selling_price_dzd, cost_price_dzd, stock_quantity || 0, supplier_id]);
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/:id', async (req, res) => {
+  try {
+    const db = getDb();
+    const { name, selling_price_dzd, cost_price_dzd, stock_quantity, supplier_id } = req.body;
+    await db.query('UPDATE products SET name = $1, selling_price_dzd = $2, cost_price_dzd = $3, stock_quantity = $4, supplier_id = $5 WHERE id = $6', [name, selling_price_dzd, cost_price_dzd, stock_quantity, supplier_id, req.params.id]);
+    const result = await db.query('SELECT * FROM products WHERE id = $1', [req.params.id]);
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/:id', async (req, res) => {
+  try {
+    const db = getDb();
+    await db.query('DELETE FROM products WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+export default router;
+
+
+=========================================
+📁 FILE: backup_20260429_164603/server.js
+=========================================
+
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { initDatabase } from './api/db.js';
+import entriesRouter from './api/entries.js';
+import settingsRouter from './api/settings.js';
+import productsRouter from './api/products.js';
+import suppliersRouter from './api/suppliers.js';
+import customersRouter from './api/customers.js';
+import campaignsRouter from './api/campaigns.js';
+import backupRouter from './api/backup.js';
+import authRouter from './api/auth.js';
+
+dotenv.config();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const app = express();
+const PORT = process.env.PORT || 3001;
+
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
+
+initDatabase();
+
+app.use('/api/auth', authRouter);
+app.use('/api/entries', entriesRouter);
+app.use('/api/settings', settingsRouter);
+app.use('/api/products', productsRouter);
+app.use('/api/suppliers', suppliersRouter);
+app.use('/api/customers', customersRouter);
+app.use('/api/campaigns', campaignsRouter);
+app.use('/api/backup', backupRouter);
+
+app.use(express.static(path.join(__dirname, 'src/dist')));
+
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'src/dist/index.html'));
+});
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
+=========================================
+📁 FILE: backup_20260429_165252/BreakEvenCalculator.jsx
+=========================================
+
+import { useState } from 'react';
+import { Input } from '../components/ui/Input';
+import { formatNumber } from '../utils/calculator';
+import { Calculator } from 'lucide-react';
+
+export function BreakEvenCalculator() {
+  const [values, setValues] = useState({
+    selling_price: 4900,
+    product_cost: 3400,
+    ad_spend: 100,
+    confirmation_rate: 70,
+    delivery_rate: 70,
+    target_profit: 0
+  });
+
+  const cprCap = values.selling_price - values.product_cost;
+  const breakEvenROAS = cprCap > 0 ? values.selling_price / cprCap : 0;
+
+  const profitPerDelivered = cprCap;
+  const deliveredNeeded = profitPerDelivered > 0 ? (values.target_profit + values.ad_spend * 250) / profitPerDelivered : 0;
+  const confirmedNeeded = values.delivery_rate > 0 ? deliveredNeeded / (values.delivery_rate / 100) : 0;
+  const ordersNeeded = values.confirmation_rate > 0 ? confirmedNeeded / (values.confirmation_rate / 100) : 0;
+
+  return (
+    <div className="p-6 max-w-3xl mx-auto space-y-6">
+      <div className="card">
+        <div className="flex items-center gap-3 mb-6">
+          <div className="p-3 bg-blue-100 rounded-lg">
+            <Calculator className="w-6 h-6 text-blue-600" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold">Calculateur Seuil de Rentabilité</h2>
+            <p className="text-sm text-gray-500">Combien de commandes pour être rentable ?</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 mb-6">
+          <Input label="Prix de Vente (DZD)" type="number" value={values.selling_price} onChange={e => setValues({...values, selling_price: Number(e.target.value)})} />
+          <Input label="Coût Produit (DZD)" type="number" value={values.product_cost} onChange={e => setValues({...values, product_cost: Number(e.target.value)})} />
+          <Input label="Dépenses Pub (USD)" type="number" value={values.ad_spend} onChange={e => setValues({...values, ad_spend: Number(e.target.value)})} />
+          <Input label="Confirmation %" type="number" value={values.confirmation_rate} onChange={e => setValues({...values, confirmation_rate: Number(e.target.value)})} />
+          <Input label="Livraison %" type="number" value={values.delivery_rate} onChange={e => setValues({...values, delivery_rate: Number(e.target.value)})} />
+          <Input label="Profit Cible (DZD)" type="number" value={values.target_profit} onChange={e => setValues({...values, target_profit: Number(e.target.value)})} />
+        </div>
+
+        <div className="bg-slate-50 rounded-xl p-6 space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="bg-white p-4 rounded-lg">
+              <p className="text-sm text-gray-500">CPR CAP (Marge)</p>
+              <p className="text-2xl font-bold text-blue-600 tabular-nums">{formatNumber(cprCap, 0)} DZD</p>
+            </div>
+            <div className="bg-white p-4 rounded-lg">
+              <p className="text-sm text-gray-500">Break Even ROAS</p>
+              <p className="text-2xl font-bold text-amber-600 tabular-nums">{formatNumber(breakEvenROAS, 2)}x</p>
+            </div>
+          </div>
+
+          <div className="bg-white p-4 rounded-lg border-2 border-emerald-200">
+            <p className="text-sm text-gray-500 mb-2">Commandes nécessaires pour {values.target_profit > 0 ? `un profit de ${formatNumber(values.target_profit, 0)} DZD` : 'le seuil de rentabilité'}</p>
+            <div className="flex items-baseline gap-2">
+              <span className="text-4xl font-bold text-emerald-600 tabular-nums">{Math.ceil(ordersNeeded)}</span>
+              <span className="text-gray-500">commandes</span>
+            </div>
+            <p className="text-sm text-gray-500 mt-2">
+              → {formatNumber(confirmedNeeded, 1)} confirmées → {formatNumber(deliveredNeeded, 1)} livrées
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+=========================================
+📁 FILE: backup_20260429_165252/Dashboard.jsx
+=========================================
+
+import { useEffect } from 'react';
+import { useApi } from '../hooks/useApi';
+import { useSettings } from '../hooks/useSettings';
+import { KPICard } from '../components/KPICard';
+import { DataTable } from '../components/DataTable';
+import { RevenueChart } from '../components/Charts/RevenueChart';
+import { calculateCOD, formatNumber } from '../utils/calculator';
+import { ShoppingCart, TrendingUp, DollarSign } from 'lucide-react';
+
+export function Dashboard() {
+  const { data: entries, fetch: fetchEntries, loading } = useApi('/api/entries');
+  const { settings } = useSettings();
+  const exchangeRate = settings?.exchange_rate || 250;
+
+  useEffect(() => { fetchEntries(); }, []);
+
+  const totals = entries?.reduce((acc, entry) => {
+    const m = calculateCOD(entry, exchangeRate);
+    acc.orders += entry.orders;
+    acc.delivered += m.livrees;
+    acc.revenue += m.revenu_dzd;
+    acc.profit += m.profit_net_dzd;
+    acc.adSpend += m.depenses_pub_usd;
+    return acc;
+  }, { orders: 0, delivered: 0, revenue: 0, profit: 0, adSpend: 0 }) || { orders: 0, delivered: 0, revenue: 0, profit: 0, adSpend: 0 };
+
+  const recentEntries = entries?.slice(0, 5) || [];
+
+  return (
+    <div className="p-6 space-y-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <KPICard 
+          title="Commandes Totales" 
+          value={totals.orders} 
+          subtitle={`${formatNumber(totals.delivered, 0)} livrées`}
+        />
+        <KPICard 
+          title="Revenus (DZD)" 
+          value={totals.revenue} 
+          isCurrency 
+          currency="DZD"
+          type="info"
+        />
+        <KPICard 
+          title="Profit Net (DZD)" 
+          value={totals.profit} 
+          isCurrency 
+          currency="DZD"
+          type={totals.profit >= 0 ? 'profit' : 'loss'}
+        />
+        <KPICard 
+          title="ROAS Moyen" 
+          value={totals.adSpend > 0 ? (totals.revenue / exchangeRate) / totals.adSpend : 0} 
+          suffix="x"
+          type={totals.adSpend > 0 && (totals.revenue / exchangeRate) / totals.adSpend >= 3 ? 'profit' : 'warning'}
+        />
+      </div>
+
+      <div className="grid lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2">
+          <RevenueChart data={entries || []} exchangeRate={exchangeRate} />
+        </div>
+        <div className="card">
+          <h3 className="font-bold text-lg mb-4">Répartition des Coûts</h3>
+          {entries?.length > 0 && (
+            <div className="space-y-4">
+              {(() => {
+                const totalCost = totals.delivered * (entries[0]?.product_cost_dzd || 3400) + totals.adSpend * exchangeRate;
+                const productCost = totals.delivered * (entries[0]?.product_cost_dzd || 3400);
+                const adCost = totals.adSpend * exchangeRate;
+                return (
+                  <>
+                    <div>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span>Coût Produit</span>
+                        <span className="font-medium">{formatNumber((productCost/totalCost)*100, 1)}%</span>
+                      </div>
+                      <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                        <div className="h-full bg-amber-500" style={{ width: `${(productCost/totalCost)*100}%` }} />
+                      </div>
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span>Publicité</span>
+                        <span className="font-medium">{formatNumber((adCost/totalCost)*100, 1)}%</span>
+                      </div>
+                      <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                        <div className="h-full bg-red-500" style={{ width: `${(adCost/totalCost)*100}%` }} />
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div>
+        <h3 className="font-bold text-lg mb-4">Entrées Récentes</h3>
+        <DataTable 
+          data={recentEntries} 
+          exchangeRate={exchangeRate} 
+          loading={loading}
+          onDelete={() => {}}
+          onBulkDelete={() => {}}
+        />
+      </div>
+    </div>
+  );
+}
+
+
+=========================================
+📁 FILE: backup_20260429_165252/EntryForm.jsx
+=========================================
+
+import { useState, useEffect } from 'react';
+import { Input } from './ui/Input';
+import { Button } from './ui/Button';
+import { useCalculator } from '../hooks/useCalculator';
+import { LivePreview } from './LivePreview';
+import { api } from '../hooks/useApi';
+import { Toast } from './ui/Toast';
+
+export function EntryForm({ settings, onSuccess }) {
+  const exchangeRate = settings?.exchange_rate || 250;
+  const { values, updateValue, metrics, setValues } = useCalculator({
+    orders: 0,
+    confirmation_rate: settings?.default_confirmation || 70,
+    delivery_rate: settings?.default_delivery || 70,
+    ad_spend_usd: 0,
+    clicks: 0,
+    selling_price_dzd: settings?.default_price || 4900,
+    product_cost_dzd: settings?.default_cost || 3400
+  }, exchangeRate);
+
+  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [campaign, setCampaign] = useState('');
+  const [campaigns, setCampaigns] = useState([]);
+  const [notes, setNotes] = useState('');
+  const [toast, setToast] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    loadCampaigns();
+  }, []);
+
+  const loadCampaigns = async () => {
+    try {
+      const res = await api.get('/api/campaigns');
+      setCampaigns(res.data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await api.post('/api/entries', {
+        date,
+        campaign,
+        ...values,
+        notes
+      });
+      setToast({ message: 'Entrée enregistrée avec succès !', type: 'success' });
+      setValues({
+        orders: 0, confirmation_rate: 70, delivery_rate: 70,
+        ad_spend_usd: 0, clicks: 0,
+        selling_price_dzd: settings?.default_price || 4900,
+        product_cost_dzd: settings?.default_cost || 3400
+      });
+      setCampaign('');
+      setNotes('');
+      onSuccess?.();
+    } catch (err) {
+      setToast({ message: 'Erreur lors de l\'enregistrement', type: 'error' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="grid lg:grid-cols-2 gap-8">
+      {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <div className="card">
+          <h3 className="font-bold text-lg mb-4">Informations Générales</h3>
+          <div className="grid grid-cols-2 gap-4">
+            <Input 
+              label="Date" 
+              type="date" 
+              value={date} 
+              onChange={e => setDate(e.target.value)} 
+              required 
+            />
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Campagne</label>
+              <input 
+                list="campaigns"
+                className="input-field"
+                value={campaign}
+                onChange={e => setCampaign(e.target.value)}
+                placeholder="Nom de la campagne"
+              />
+              <datalist id="campaigns">
+                {campaigns.map(c => <option key={c.id} value={c.name} />)}
+              </datalist>
+            </div>
+          </div>
+        </div>
+
+        <div className="card">
+          <h3 className="font-bold text-lg mb-4">Métriques de Commande</h3>
+          <div className="grid grid-cols-2 gap-4">
+            <Input 
+              label="Nombre de Commandes" 
+              type="number" 
+              min="0"
+              value={values.orders || ''} 
+              onChange={e => updateValue('orders', e.target.value)} 
+              required 
+            />
+            <Input 
+              label="Nombre de Clicks" 
+              type="number" 
+              min="0"
+              value={values.clicks || ''} 
+              onChange={e => updateValue('clicks', e.target.value)} 
+            />
+            <Input 
+              label="Taux de Confirmation %" 
+              type="number" 
+              min="0" max="100" step="0.1"
+              value={values.confirmation_rate || ''} 
+              onChange={e => updateValue('confirmation_rate', e.target.value)} 
+            />
+            <Input 
+              label="Taux de Livraison %" 
+              type="number" 
+              min="0" max="100" step="0.1"
+              value={values.delivery_rate || ''} 
+              onChange={e => updateValue('delivery_rate', e.target.value)} 
+            />
+          </div>
+        </div>
+
+        <div className="card">
+          <h3 className="font-bold text-lg mb-4">Financier</h3>
+          <div className="grid grid-cols-2 gap-4">
+            <Input 
+              label="Dépenses Publicitaires (USD)" 
+              type="number" 
+              min="0" step="0.01"
+              value={values.ad_spend_usd || ''} 
+              onChange={e => updateValue('ad_spend_usd', e.target.value)} 
+            />
+            <Input 
+              label="CPR USD (auto)" 
+              type="number" 
+              step="0.01"
+              value={values.cpr_usd?.toFixed(2) || ''} 
+              readOnly 
+              className="bg-gray-100"
+            />
+            <Input 
+              label="Prix de Vente Unitaire (DZD)" 
+              type="number" 
+              min="0"
+              value={values.selling_price_dzd || ''} 
+              onChange={e => updateValue('selling_price_dzd', e.target.value)} 
+            />
+            <Input 
+              label="Coût Produit Unitaire (DZD)" 
+              type="number" 
+              min="0"
+              value={values.product_cost_dzd || ''} 
+              onChange={e => updateValue('product_cost_dzd', e.target.value)} 
+            />
+          </div>
+        </div>
+
+        <div className="card">
+          <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+          <textarea 
+            className="input-field h-20 resize-none"
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
+            placeholder="Notes optionnelles..."
+          />
+        </div>
+
+        <Button type="submit" disabled={saving} className="w-full py-3 text-lg">
+          {saving ? 'Enregistrement...' : '💾 Enregistrer l\'Entrée'}
+        </Button>
+      </form>
+
+      <div className="lg:sticky lg:top-6 h-fit">
+        <LivePreview metrics={metrics} exchangeRate={exchangeRate} />
+      </div>
+    </div>
+  );
+}
+
+
+=========================================
+📁 FILE: backup_20260429_165252/Products.jsx
+=========================================
+
+import { useState, useEffect } from 'react';
+import { useApi } from '../hooks/useApi';
+import { Input } from '../components/ui/Input';
+import { Button } from '../components/ui/Button';
+import { Badge } from '../components/ui/Badge';
+import { Toast } from '../components/ui/Toast';
+import { Package, AlertTriangle } from 'lucide-react';
+
+export function Products() {
+  const { data: products, fetch, create, remove } = useApi('/api/products');
+  const [form, setForm] = useState({ name: '', selling_price_dzd: '', cost_price_dzd: '', stock_quantity: '' });
+  const [toast, setToast] = useState(null);
+
+  useEffect(() => { fetch(); }, []);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await create(form);
+      setToast({ message: 'Produit ajouté', type: 'success' });
+      setForm({ name: '', selling_price_dzd: '', cost_price_dzd: '', stock_quantity: '' });
+      fetch();
+    } catch (err) {
+      setToast({ message: 'Erreur', type: 'error' });
+    }
+  };
+
+  return (
+    <div className="p-6 space-y-6">
+      {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+
+      <div className="card">
+        <h3 className="font-bold text-lg mb-4">Nouveau Produit</h3>
+        <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <Input label="Nom" value={form.name} onChange={e => setForm({...form, name: e.target.value})} required />
+          <Input label="Prix Vente DZD" type="number" value={form.selling_price_dzd} onChange={e => setForm({...form, selling_price_dzd: e.target.value})} required />
+          <Input label="Coût DZD" type="number" value={form.cost_price_dzd} onChange={e => setForm({...form, cost_price_dzd: e.target.value})} required />
+          <Input label="Stock" type="number" value={form.stock_quantity} onChange={e => setForm({...form, stock_quantity: e.target.value})} />
+          <div className="md:col-span-4">
+            <Button type="submit">Ajouter Produit</Button>
+          </div>
+        </form>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {products?.map(product => (
+          <div key={product.id} className="card relative">
+            {product.stock_quantity < 10 && (
+              <div className="absolute top-4 right-4">
+                <Badge variant="warning"><AlertTriangle className="w-3 h-3 mr-1" /> Stock Faible</Badge>
+              </div>
+            )}
+            <div className="flex items-start gap-3">
+              <div className="p-3 bg-blue-100 rounded-lg">
+                <Package className="w-6 h-6 text-blue-600" />
+              </div>
+              <div>
+                <h4 className="font-bold text-gray-900">{product.name}</h4>
+                <p className="text-sm text-gray-500">{product.supplier_name || 'Sans fournisseur'}</p>
+              </div>
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-2 text-center">
+              <div className="bg-gray-50 rounded p-2">
+                <p className="text-xs text-gray-500">Prix</p>
+                <p className="font-bold tabular-nums">{product.selling_price_dzd}</p>
+              </div>
+              <div className="bg-gray-50 rounded p-2">
+                <p className="text-xs text-gray-500">Coût</p>
+                <p className="font-bold tabular-nums">{product.cost_price_dzd}</p>
+              </div>
+              <div className="bg-gray-50 rounded p-2">
+                <p className="text-xs text-gray-500">Stock</p>
+                <p className={`font-bold tabular-nums ${product.stock_quantity < 10 ? 'text-red-600' : ''}`}>
+                  {product.stock_quantity}
+                </p>
+              </div>
+            </div>
+            <Button variant="danger" className="w-full mt-4" onClick={() => remove(product.id).then(fetch)}>
+              Supprimer
+            </Button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+
+=========================================
+📁 FILE: backup_20260429_165252/calculator.js
+=========================================
+
+export function calculateCOD(entry, exchangeRate = 250) {
+  const orders = Number(entry.orders) || 0;
+  const confirmationRate = Number(entry.confirmation_rate) || 0;
+  const deliveryRate = Number(entry.delivery_rate) || 0;
+  const adSpendUSD = Number(entry.ad_spend_usd) || 0;
+  const clicks = Number(entry.clicks) || 0;
+  const sellingPriceDZD = Number(entry.selling_price_dzd) || 0;
+  const productCostDZD = Number(entry.product_cost_dzd) || 0;
+
+  const confirmed = orders * (confirmationRate / 100);
+  const delivered = confirmed * (deliveryRate / 100);
+  
+  const revenueDZD = delivered * sellingPriceDZD;
+  const productCostDeliveredDZD = delivered * productCostDZD;
+  const adSpendDZD = adSpendUSD * exchangeRate;
+  
+  const profitDZD = revenueDZD - productCostDeliveredDZD - adSpendDZD;
+  const profitUSD = profitDZD / exchangeRate;
+  
+  const profitPerUnitDZD = delivered > 0 ? profitDZD / delivered : 0;
+  const profitPerUnitUSD = profitPerUnitDZD / exchangeRate;
+  
+  const cprUSD = orders > 0 ? adSpendUSD / orders : 0;
+  const cprCapDZD = sellingPriceDZD - productCostDZD;
+  const cprCapUSD = cprCapDZD / exchangeRate;
+  const breakEvenROAS = cprCapDZD > 0 ? sellingPriceDZD / cprCapDZD : 0;
+  const costPerDeliveredUSD = delivered > 0 ? adSpendUSD / delivered : 0;
+  const roas = adSpendDZD > 0 ? revenueDZD / adSpendDZD : 0;
+  const rpc = clicks > 0 ? revenueDZD / clicks : 0;
+  const cpc = clicks > 0 ? adSpendUSD / clicks : 0;
+  const effectiveDeliveryRate = orders > 0 ? (delivered / orders) * 100 : 0;
+
+  return {
+    commandes: orders,
+    confirmees: confirmed,
+    livrees: delivered,
+    revenu_dzd: revenueDZD,
+    revenu_usd: revenueDZD / exchangeRate,
+    cout_produit_dzd: productCostDeliveredDZD,
+    cout_produit_usd: productCostDeliveredDZD / exchangeRate,
+    depenses_pub_usd: adSpendUSD,
+    depenses_pub_dzd: adSpendDZD,
+    profit_net_dzd: profitDZD,
+    profit_net_usd: profitUSD,
+    profit_unite_dzd: profitPerUnitDZD,
+    profit_unite_usd: profitPerUnitUSD,
+    cpr_usd: cprUSD,
+    cpr_cap_dzd: cprCapDZD,
+    cpr_cap_usd: cprCapUSD,
+    break_even_roas: breakEvenROAS,
+    cout_par_livree_usd: costPerDeliveredUSD,
+    roas,
+    rpc,
+    cpc,
+    taux_livraison_effectif: effectiveDeliveryRate,
+    clicks
+  };
+}
+
+export function formatNumber(num, decimals = 2) {
+  return new Intl.NumberFormat('fr-FR', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals
+  }).format(num);
+}
+
+export function formatCurrency(num, currency = 'DZD') {
+  const symbol = currency === 'USD' ? '$' : 'DZD';
+  const formatted = new Intl.NumberFormat('fr-FR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(num);
+  return currency === 'USD' ? `${symbol}${formatted}` : `${formatted} ${symbol}`;
+}
+
+
+=========================================
+📁 FILE: backup_20260429_165252/db.js
+=========================================
+
+import pg from 'pg';
+const { Pool } = pg;
+
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
+
+export async function initDatabase() {
+  const client = await pool.connect();
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS settings (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      exchange_rate REAL DEFAULT 250,
+      business_name TEXT DEFAULT 'Mon Entreprise',
+      default_price REAL DEFAULT 4900,
+      default_cost REAL DEFAULT 3400,
+      default_confirmation REAL DEFAULT 70,
+      default_delivery REAL DEFAULT 70,
+      dark_mode INTEGER DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS entries (
+      id SERIAL PRIMARY KEY,
+      date TEXT NOT NULL,
+      campaign TEXT,
+      orders INTEGER NOT NULL,
+      confirmation_rate REAL NOT NULL,
+      delivery_rate REAL NOT NULL,
+      ad_spend_usd REAL NOT NULL,
+      cpr_usd REAL,
+      clicks INTEGER DEFAULT 0,
+      selling_price_dzd REAL NOT NULL,
+      product_cost_dzd REAL NOT NULL,
+      notes TEXT,
+      product_id INTEGER,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS products (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      selling_price_dzd REAL NOT NULL,
+      cost_price_dzd REAL NOT NULL,
+      stock_quantity INTEGER DEFAULT 0,
+      supplier_id INTEGER,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS suppliers (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      phone TEXT,
+      address TEXT,
+      wilaya TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS customers (
+      id SERIAL PRIMARY KEY,
+      name TEXT,
+      phone TEXT UNIQUE,
+      wilaya TEXT,
+      address TEXT,
+      orders_count INTEGER DEFAULT 0,
+      total_spent_dzd REAL DEFAULT 0,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE IF NOT EXISTS campaigns (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      platform TEXT,
+      budget_usd REAL,
+      start_date TEXT,
+      end_date TEXT,
+      active INTEGER DEFAULT 1,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    INSERT INTO settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
+  `);
+  client.release();
+  console.log('PostgreSQL initialized');
+}
+
+export function getDb() {
+  return pool;
+}
+
+
+=========================================
+📁 FILE: backup_20260429_165252/products.js
+=========================================
+
+import { Router } from 'express';
+import { getDb } from './db.js';
+const router = Router();
+
+router.get('/', async (req, res) => {
+  try {
+    const db = getDb();
+    const result = await db.query('SELECT p.*, s.name as supplier_name FROM products p LEFT JOIN suppliers s ON p.supplier_id = s.id ORDER BY p.created_at DESC');
+    res.json(result.rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/', async (req, res) => {
+  try {
+    const db = getDb();
+    const { name, selling_price_dzd, cost_price_dzd, stock_quantity, supplier_id } = req.body;
+    const result = await db.query('INSERT INTO products (name, selling_price_dzd, cost_price_dzd, stock_quantity, supplier_id) VALUES ($1, $2, $3, $4, $5) RETURNING *', [name, selling_price_dzd, cost_price_dzd, stock_quantity || 0, supplier_id]);
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/:id', async (req, res) => {
+  try {
+    const db = getDb();
+    const { name, selling_price_dzd, cost_price_dzd, stock_quantity, supplier_id } = req.body;
+    await db.query('UPDATE products SET name = $1, selling_price_dzd = $2, cost_price_dzd = $3, stock_quantity = $4, supplier_id = $5 WHERE id = $6', [name, selling_price_dzd, cost_price_dzd, stock_quantity, supplier_id, req.params.id]);
+    const result = await db.query('SELECT * FROM products WHERE id = $1', [req.params.id]);
+    res.json(result.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.delete('/:id', async (req, res) => {
+  try {
+    const db = getDb();
+    await db.query('DELETE FROM products WHERE id = $1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+export default router;
+
+
+=========================================
+📁 FILE: backup_20260429_165252/server.js
+=========================================
+
+import express from 'express';
+import cors from 'cors';
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import { initDatabase } from './api/db.js';
+import entriesRouter from './api/entries.js';
+import settingsRouter from './api/settings.js';
+import productsRouter from './api/products.js';
+import suppliersRouter from './api/suppliers.js';
+import customersRouter from './api/customers.js';
+import campaignsRouter from './api/campaigns.js';
+import backupRouter from './api/backup.js';
+import authRouter from './api/auth.js';
+
+dotenv.config();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const app = express();
+const PORT = process.env.PORT || 3001;
+
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
+
+initDatabase();
+
+app.use('/api/auth', authRouter);
+app.use('/api/entries', entriesRouter);
+app.use('/api/settings', settingsRouter);
+app.use('/api/products', productsRouter);
+app.use('/api/suppliers', suppliersRouter);
+app.use('/api/customers', customersRouter);
+app.use('/api/campaigns', campaignsRouter);
+app.use('/api/backup', backupRouter);
+
+app.use(express.static(path.join(__dirname, 'src/dist')));
+
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'src/dist/index.html'));
+});
+
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
+=========================================
+📁 FILE: index.html
+=========================================
+
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ERP Pro - Gestion COD</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
+
+
+=========================================
+📁 FILE: postcss.config.js
+=========================================
+
+export default {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+}
+
+
+=========================================
+📁 FILE: server.js
+=========================================
+
+import express from 'express';
+import path from 'path';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const app = express();
+const PORT = process.env.PORT || 10000; // Render defaults to 10000
+
+// Serve the static files from the Vite build
+app.use(express.static(path.join(__dirname, 'src/dist')));
+
+// Handle React Router: send all other requests to index.html
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'src/dist', 'index.html'));
+});
+
+app.listen(PORT, () => {
+  console.log(`Server listening on port ${PORT}`);
+});
+
+
+=========================================
+📁 FILE: src/App.jsx
+=========================================
+
+import { Routes, Route } from 'react-router-dom';
+import { Sidebar } from './components/Sidebar';
+import { Header } from './components/Header';
+import { Dashboard } from './pages/Dashboard';;
+import { Entry } from './pages/Entry';;
+import { History } from './pages/History';;
+import { Analytics } from './pages/Analytics';;
+import Products from './pages/Products';;
+import { Suppliers } from './pages/Suppliers';;
+import { Customers } from './pages/Customers';;
+import { Settings } from './pages/Settings';;
+import BreakEvenCalculator from './pages/BreakEvenCalculator';;
+
+function App() {
+  return (
+    <div className="flex min-h-screen bg-gray-50">
+      <Sidebar />
+      <div className="flex-1 lg:ml-0">
+        <Header />
+        <main className="pb-12">
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/entry" element={<Entry />} />
+            <Route path="/history" element={<History />} />
+            <Route path="/analytics" element={<Analytics />} />
+            <Route path="/products" element={<Products />} />
+            <Route path="/suppliers" element={<Suppliers />} />
+            <Route path="/customers" element={<Customers />} />
+            <Route path="/settings" element={<Settings />} />
+            <Route path="/break-even" element={<BreakEvenCalculator />} />
+          </Routes>
+        </main>
+      </div>
+    </div>
+  );
+}
+
+export default App;
+
+
+=========================================
+📁 FILE: src/components/Charts/CostChart.jsx
+=========================================
+
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+
+export function CostChart({ data, exchangeRate }) {
+  const chartData = data.map(row => {
+    const delivered = row.orders * (row.confirmation_rate / 100) * (row.delivery_rate / 100);
+    return {
+      date: row.date,
+      pub: row.ad_spend_usd * exchangeRate,
+      produit: delivered * row.product_cost_dzd
+    };
+  });
+
+  return (
+    <div className="card h-96">
+      <h3 className="font-bold text-lg mb-4">Pub vs Coût Produit (DZD)</h3>
+      <ResponsiveContainer width="100%" height="100%">
+        <BarChart data={chartData}>
+          <CartesianGrid strokeDasharray="3 3" />
+          <XAxis dataKey="date" />
+          <YAxis />
+          <Tooltip />
+          <Legend />
+          <Bar dataKey="pub" name="Dépenses Pub" fill="#ef4444" />
+          <Bar dataKey="produit" name="Coût Produit" fill="#f59e0b" />
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+
+=========================================
+📁 FILE: src/components/Charts/ROASChart.jsx
+=========================================
+
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, ReferenceLine } from 'recharts';
+
+export function ROASChart({ data }) {
+  const chartData = data.map(row => {
+    const delivered = row.orders * (row.confirmation_rate / 100) * (row.delivery_rate / 100);
+    const revenue = delivered * row.selling_price_dzd;
+    const adSpendDZD = row.ad_spend_usd * 250;
+    const roas = adSpendDZD > 0 ? revenue / adSpendDZD : 0;
+    const breakEven = row.selling_price_dzd / (row.selling_price_dzd - row.product_cost_dzd);
+    return { date: row.date, roas: Number(roas.toFixed(2)), breakEven: Number(breakEven.toFixed(2)) };
+  });
+
+  return (
+    <div className="card h-96">
+      <h3 className="font-bold text-lg mb-4">ROAS vs Seuil Rentabilité</h3>
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={chartData}>
+          <CartesianGrid strokeDasharray="3 3" />
+          <XAxis dataKey="date" />
+          <YAxis />
+          <Tooltip />
+          <Legend />
+          <ReferenceLine y={1} stroke="#dc2626" strokeDasharray="3 3" label="Seuil" />
+          <Line type="monotone" dataKey="roas" name="ROAS Réel" stroke="#2563eb" strokeWidth={2} />
+          <Line type="monotone" dataKey="breakEven" name="Break Even" stroke="#f59e0b" strokeWidth={2} />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+
+=========================================
+📁 FILE: src/components/Charts/RevenueChart.jsx
+=========================================
+
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { formatNumber } from '../../utils/calculator';
+
+export function RevenueChart({ data, exchangeRate }) {
+  const chartData = data.map(row => {
+    const delivered = row.orders * (row.confirmation_rate / 100) * (row.delivery_rate / 100);
+    return {
+      date: row.date,
+      revenu: delivered * row.selling_price_dzd,
+      profit: (delivered * row.selling_price_dzd) - (delivered * row.product_cost_dzd) - (row.ad_spend_usd * exchangeRate)
+    };
+  });
+
+  return (
+    <div className="card h-96">
+      <h3 className="font-bold text-lg mb-4">Revenus vs Profit (DZD)</h3>
+      <ResponsiveContainer width="100%" height="100%">
+        <LineChart data={chartData}>
+          <CartesianGrid strokeDasharray="3 3" />
+          <XAxis dataKey="date" />
+          <YAxis tickFormatter={v => formatNumber(v, 0)} />
+          <Tooltip formatter={v => formatNumber(v, 0)} />
+          <Legend />
+          <Line type="monotone" dataKey="revenu" name="Revenus" stroke="#2563eb" strokeWidth={2} />
+          <Line type="monotone" dataKey="profit" name="Profit Net" stroke="#059669" strokeWidth={2} />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+}
+
+
+=========================================
+📁 FILE: src/components/DataTable.jsx
+=========================================
+
+import { useState } from 'react';
+import { ChevronUp, ChevronDown, Trash2, Download } from 'lucide-react';
+import { formatCurrency, formatNumber, calculateCOD } from '../utils/calculator';
+import { Button } from './ui/Button';
+
+export function DataTable({ data, exchangeRate, onDelete, onBulkDelete, loading }) {
+  const [sortField, setSortField] = useState('date');
+  const [sortDir, setSortDir] = useState('desc');
+  const [selected, setSelected] = useState(new Set());
+
+  const handleSort = (field) => {
+    if (sortField === field) {
+      setSortDir(sortDir === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortField(field);
+      setSortDir('desc');
+    }
+  };
+
+  const sortedData = [...data].sort((a, b) => {
+    let aVal = a[sortField];
+    let bVal = b[sortField];
+    if (sortDir === 'asc') return aVal > bVal ? 1 : -1;
+    return aVal < bVal ? 1 : -1;
+  });
+
+  const toggleSelect = (id) => {
+    const next = new Set(selected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setSelected(next);
+  };
+
+  const toggleSelectAll = () => {
+    if (selected.size === data.length) setSelected(new Set());
+    else setSelected(new Set(data.map(d => d.id)));
+  };
+
+  const handleBulkDelete = () => {
+    if (confirm(`Supprimer ${selected.size} entrées ?`)) {
+      onBulkDelete(Array.from(selected));
+      setSelected(new Set());
+    }
+  };
+
+  const exportCSV = () => {
+    const headers = ['Date', 'Campagne', 'Commandes', 'Confirmées', 'Livrées', 'Revenu DZD', 'Revenu USD', 'Profit DZD', 'Profit USD', 'ROAS'];
+    const rows = data.map(row => {
+      const m = calculateCOD(row, exchangeRate);
+      return [
+        row.date, row.campaign, row.orders, 
+        formatNumber(m.confirmees, 1), formatNumber(m.livrees, 2),
+        formatNumber(m.revenu_dzd, 2), formatNumber(m.revenu_usd, 2),
+        formatNumber(m.profit_net_dzd, 2), formatNumber(m.profit_net_usd, 2),
+        formatNumber(m.roas, 2)
+      ];
+    });
+
+    const csv = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'erp-export.csv';
+    a.click();
+  };
+
+  if (loading) return <div className="card text-center py-12">Chargement...</div>;
+  if (!data.length) return <div className="card text-center py-12 text-gray-500">Aucune donnée disponible</div>;
+
+  return (
+    <div className="card overflow-hidden">
+      <div className="flex justify-between items-center mb-4">
+        <div className="flex items-center gap-3">
+          {selected.size > 0 && (
+            <Button variant="danger" onClick={handleBulkDelete} className="flex items-center gap-2">
+              <Trash2 className="w-4 h-4" /> Supprimer ({selected.size})
+            </Button>
+          )}
+        </div>
+        <Button variant="outline" onClick={exportCSV} className="flex items-center gap-2">
+          <Download className="w-4 h-4" /> Export CSV
+        </Button>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-gray-200">
+              <th className="p-3">
+                <input 
+                  type="checkbox" 
+                  checked={selected.size === data.length && data.length > 0}
+                  onChange={toggleSelectAll}
+                  className="rounded border-gray-300"
+                />
+              </th>
+              {[
+                { key: 'date', label: 'Date' },
+                { key: 'campaign', label: 'Campagne' },
+                { key: 'orders', label: 'Cmd' },
+                { key: 'confirmation_rate', label: 'Conf%' },
+                { key: 'delivery_rate', label: 'Livr%' },
+                { key: 'ad_spend_usd', label: 'Pub $' },
+                { key: 'selling_price_dzd', label: 'Prix DZD' },
+              ].map(col => (
+                <th 
+                  key={col.key} 
+                  className="p-3 text-left font-semibold text-gray-700 cursor-pointer hover:bg-gray-50"
+                  onClick={() => handleSort(col.key)}
+                >
+                  <div className="flex items-center gap-1">
+                    {col.label}
+                    {sortField === col.key && (
+                      sortDir === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />
+                    )}
+                  </div>
+                </th>
+              ))}
+              <th className="p-3 text-left font-semibold text-gray-700">Profit DZD</th>
+              <th className="p-3 text-left font-semibold text-gray-700">ROAS</th>
+              <th className="p-3"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {sortedData.map(row => {
+              const m = calculateCOD(row, exchangeRate);
+              const isProfit = m.profit_net_dzd >= 0;
+              return (
+                <tr key={row.id} className="border-b border-gray-100 hover:bg-gray-50">
+                  <td className="p-3">
+                    <input 
+                      type="checkbox" 
+                      checked={selected.has(row.id)}
+                      onChange={() => toggleSelect(row.id)}
+                      className="rounded border-gray-300"
+                    />
+                  </td>
+                  <td className="p-3 tabular-nums">{row.date}</td>
+                  <td className="p-3 font-medium">{row.campaign || '-'}</td>
+                  <td className="p-3 tabular-nums">{row.orders}</td>
+                  <td className="p-3 tabular-nums">{row.confirmation_rate}%</td>
+                  <td className="p-3 tabular-nums">{row.delivery_rate}%</td>
+                  <td className="p-3 tabular-nums">${formatNumber(row.ad_spend_usd, 2)}</td>
+                  <td className="p-3 tabular-nums">{formatNumber(row.selling_price_dzd, 0)}</td>
+                  <td className={`p-3 tabular-nums font-semibold ${isProfit ? 'text-emerald-600' : 'text-red-600'}`}>
+                    {formatNumber(m.profit_net_dzd, 0)}
+                  </td>
+                  <td className={`p-3 tabular-nums font-semibold ${m.roas >= m.break_even_roas ? 'text-emerald-600' : 'text-red-600'}`}>
+                    {formatNumber(m.roas, 2)}x
+                  </td>
+                  <td className="p-3">
+                    <button onClick={() => onDelete(row.id)} className="text-red-500 hover:text-red-700">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+
+=========================================
+📁 FILE: src/components/EntryForm.jsx
+=========================================
+
+import { useState, useEffect } from 'react';
+import { Input } from './ui/Input';
+import { Button } from './ui/Button';
+import { useCalculator } from '../hooks/useCalculator';
+import { LivePreview } from './LivePreview';
+import { api } from '../hooks/useApi';
+import { Toast } from './ui/Toast';
+
+export function EntryForm({ settings, onSuccess }) {
+  const exchangeRate = settings?.exchange_rate || 250;
+  const { values, updateValue, metrics, setValues } = useCalculator({
+    orders: 0,
+    confirmation_rate: settings?.default_confirmation || 70,
+    delivery_rate: settings?.default_delivery || 70,
+    ad_spend_usd: 0,
+    clicks: 0,
+    selling_price_dzd: settings?.default_price || 4900,
+    product_cost_dzd: settings?.default_cost || 3400
+  }, exchangeRate);
+
+  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+  const [campaign, setCampaign] = useState('');
+  const [campaigns, setCampaigns] = useState([]);
+  const [notes, setNotes] = useState('');
+  const [toast, setToast] = useState(null);
+  const [products, setProducts] = useState([]);
+  useEffect(() => {
+    fetch(`${API_URL}/api/products`).then(r => r.json()).then(setProducts);
+  }, []);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    loadCampaigns();
+  }, []);
+
+  const loadCampaigns = async () => {
+    try {
+      const res = await api.get('/api/campaigns');
+      setCampaigns(res.data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      await api.post('/api/entries', {
+        date,
+        campaign,
+        ...values,
+        notes
+      });
+      setToast({ message: 'Entrée enregistrée avec succès !', type: 'success' });
+      setValues({
+        orders: 0, confirmation_rate: 70, delivery_rate: 70,
+        ad_spend_usd: 0, clicks: 0,
+        selling_price_dzd: settings?.default_price || 4900,
+        product_cost_dzd: settings?.default_cost || 3400
+      });
+      setCampaign('');
+      setNotes('');
+      onSuccess?.();
+    } catch (err) {
+      setToast({ message: 'Erreur lors de l\'enregistrement', type: 'error' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="grid lg:grid-cols-2 gap-8">
+      {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <div className="card">
+          <h3 className="font-bold text-lg mb-4">Informations Générales</h3>
+          <div className="grid grid-cols-2 gap-4">
+            <Input 
+              label="Date" 
+              type="date" 
+              value={date} 
+              onChange={e => setDate(e.target.value)} 
+              required 
+            />
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Campagne</label>
+              <input 
+                list="campaigns"
+                className="input-field"
+                value={campaign}
+                onChange={e => setCampaign(e.target.value)}
+                placeholder="Nom de la campagne"
+              />
+              <datalist id="campaigns">
+                {campaigns.map(c => <option key={c.id} value={c.name} />)}
+              </datalist>
+            </div>
+          </div>
+        </div>
+
+        <div className="card">
+          <h3 className="font-bold text-lg mb-4">Métriques de Commande</h3>
+          <div className="grid grid-cols-2 gap-4">
+            <Input 
+              label="Nombre de Commandes" 
+              type="number" 
+              min="0"
+              value={values.orders || ''} 
+              onChange={e => updateValue('orders', e.target.value)} 
+              required 
+            />
+            <Input 
+              label="Nombre de Clicks" 
+              type="number" 
+              min="0"
+              value={values.clicks || ''} 
+              onChange={e => updateValue('clicks', e.target.value)} 
+            />
+            <Input 
+              label="Taux de Confirmation %" 
+              type="number" 
+              min="0" max="100" step="0.1"
+              value={values.confirmation_rate || ''} 
+              onChange={e => updateValue('confirmation_rate', e.target.value)} 
+            />
+            <Input 
+              label="Taux de Livraison %" 
+              type="number" 
+              min="0" max="100" step="0.1"
+              value={values.delivery_rate || ''} 
+              onChange={e => updateValue('delivery_rate', e.target.value)} 
+            />
+          </div>
+        </div>
+
+        <div className="card">
+          <h3 className="font-bold text-lg mb-4">Financier</h3>
+          <div className="grid grid-cols-2 gap-4">
+            <Input 
+              label="Dépenses Publicitaires (USD)" 
+              type="number" 
+              min="0" step="0.01"
+              value={values.ad_spend_usd || ''} 
+              onChange={e => updateValue('ad_spend_usd', e.target.value)} 
+            />
+            <Input 
+              label="CPR USD (auto)" 
+              type="number" 
+              step="0.01"
+              value={values.cpr_usd?.toFixed(2) || ''} 
+              readOnly 
+              className="bg-gray-100"
+            />
+            <Input 
+              label="Prix de Vente Unitaire (DZD)" 
+              type="number" 
+              min="0"
+              value={values.selling_price_dzd || ''} 
+              onChange={e => updateValue('selling_price_dzd', e.target.value)} 
+            />
+            <Input 
+              label="Coût Produit Unitaire (DZD)" 
+              type="number" 
+              min="0"
+              value={values.product_cost_dzd || ''} 
+              onChange={e => updateValue('product_cost_dzd', e.target.value)} 
+            />
+          </div>
+        </div>
+
+        <div className="card">
+          <label className="block text-sm font-medium text-gray-700 mb-1">Notes</label>
+          <textarea 
+            className="input-field h-20 resize-none"
+            value={notes}
+            onChange={e => setNotes(e.target.value)}
+            placeholder="Notes optionnelles..."
+          />
+        </div>
+
+        <Button type="submit" disabled={saving} className="w-full py-3 text-lg">
+          {saving ? 'Enregistrement...' : '💾 Enregistrer l\'Entrée'}
+        </Button>
+      </form>
+
+      <div className="lg:sticky lg:top-6 h-fit">
+        <LivePreview metrics={metrics} exchangeRate={exchangeRate} />
+      </div>
+    </div>
+  );
+}
+
+
+=========================================
+📁 FILE: src/components/Header.jsx
+=========================================
+
+import { useLocation } from 'react-router-dom';
+import { ChevronRight } from 'lucide-react';
+
+const pageNames = {
+  '/': 'Tableau de Bord',
+  '/entry': 'Nouvelle Entrée',
+  '/history': 'Historique',
+  '/analytics': 'Analytiques',
+  '/products': 'Produits',
+  '/suppliers': 'Fournisseurs',
+  '/customers': 'Clients',
+  '/settings': 'Paramètres',
+  '/break-even': 'Calculateur Seuil Rentabilité'
+};
+
+export function Header() {
+  const location = useLocation();
+  const title = pageNames[location.pathname] || 'ERP-Pro';
+
+  return (
+    <header className="bg-white border-b border-gray-200 px-6 py-4">
+      <div className="flex items-center gap-2 text-sm text-gray-500">
+        <span>Accueil</span>
+        <ChevronRight className="w-4 h-4" />
+        <span className="font-medium text-gray-900">{title}</span>
+      </div>
+      <h2 className="text-2xl font-bold text-gray-900 mt-2">{title}</h2>
+    </header>
+  );
+}
+
+
+=========================================
+📁 FILE: src/components/KPICard.jsx
+=========================================
+
+import { formatCurrency, formatNumber } from '../utils/calculator';
+
+export function KPICard({ title, value, subtitle, type = 'neutral', prefix = '', suffix = '', isCurrency = false, currency = 'DZD' }) {
+  const colors = {
+    profit: 'bg-emerald-50 border-emerald-200',
+    loss: 'bg-red-50 border-red-200',
+    warning: 'bg-amber-50 border-amber-200',
+    neutral: 'bg-white border-gray-200',
+    info: 'bg-blue-50 border-blue-200'
+  };
+
+  const textColors = {
+    profit: 'text-emerald-700',
+    loss: 'text-red-700',
+    warning: 'text-amber-700',
+    neutral: 'text-gray-900',
+    info: 'text-blue-700'
+  };
+
+  const displayValue = isCurrency 
+    ? formatCurrency(value, currency)
+    : `${prefix}${formatNumber(value)}${suffix}`;
+
+  return (
+    <div className={`card ${colors[type]} border`}>
+      <p className="text-sm font-medium text-gray-600 mb-1">{title}</p>
+      <p className={`text-2xl font-bold tabular-nums ${textColors[type]}`}>{displayValue}</p>
+      {subtitle && <p className="text-xs text-gray-500 mt-1">{subtitle}</p>}
+    </div>
+  );
+}
+
+
+=========================================
+📁 FILE: src/components/LivePreview.jsx
+=========================================
+
+import { formatCurrency, formatNumber } from '../utils/calculator';
+import { Badge } from './ui/Badge';
+
+export function LivePreview({ metrics, exchangeRate }) {
+  const isProfitable = metrics.profit_net_dzd >= 0;
+  const roasGood = metrics.roas >= metrics.break_even_roas;
+
+  return (
+    <div className="card bg-slate-50 border-2 border-blue-200">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="font-bold text-lg text-gray-900">Aperçu en Direct</h3>
+        <Badge variant={isProfitable ? 'success' : 'danger'}>
+          {isProfitable ? 'Rentable' : 'Non Rentable'}
+        </Badge>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4 mb-4">
+        <div className="bg-white p-3 rounded-lg">
+          <p className="text-xs text-gray-500">Commandes → Confirmées → Livrées</p>
+          <p className="text-lg font-bold tabular-nums">
+            {metrics.commandes} → {formatNumber(metrics.confirmees, 1)} → {formatNumber(metrics.livrees, 2)}
+          </p>
+        </div>
+        <div className="bg-white p-3 rounded-lg">
+          <p className="text-xs text-gray-500">Taux Effectif</p>
+          <p className="text-lg font-bold tabular-nums">{formatNumber(metrics.taux_livraison_effectif, 1)}%</p>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+        <div className="flex justify-between items-center py-2 border-b border-gray-200">
+          <span className="text-sm text-gray-600">Revenus (Livrés uniquement)</span>
+          <div className="text-right">
+            <p className="font-bold tabular-nums">{formatCurrency(metrics.revenu_dzd, 'DZD')}</p>
+            <p className="text-xs text-gray-500">{formatCurrency(metrics.revenu_usd, 'USD')}</p>
+          </div>
+        </div>
+
+        <div className="flex justify-between items-center py-2 border-b border-gray-200">
+          <span className="text-sm text-gray-600">Coût Produit (Livrés)</span>
+          <div className="text-right">
+            <p className="font-bold tabular-nums text-red-600">{formatCurrency(metrics.cout_produit_dzd, 'DZD')}</p>
+            <p className="text-xs text-gray-500">{formatCurrency(metrics.cout_produit_usd, 'USD')}</p>
+          </div>
+        </div>
+
+        <div className="flex justify-between items-center py-2 border-b border-gray-200">
+          <span className="text-sm text-gray-600">Dépenses Pub</span>
+          <div className="text-right">
+            <p className="font-bold tabular-nums text-red-600">{formatCurrency(metrics.depenses_pub_usd, 'USD')}</p>
+            <p className="text-xs text-gray-500">{formatCurrency(metrics.depenses_pub_dzd, 'DZD')}</p>
+          </div>
+        </div>
+
+        <div className="flex justify-between items-center py-3 bg-white rounded-lg px-3">
+          <span className="font-bold text-gray-900">Profit Net</span>
+          <div className="text-right">
+            <p className={`text-xl font-bold tabular-nums ${isProfitable ? 'text-emerald-600' : 'text-red-600'}`}>
+              {formatCurrency(metrics.profit_net_dzd, 'DZD')}
+            </p>
+            <p className={`text-sm font-medium tabular-nums ${isProfitable ? 'text-emerald-500' : 'text-red-500'}`}>
+              {formatCurrency(metrics.profit_net_usd, 'USD')}
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 mt-4">
+          <div className="bg-white p-3 rounded-lg">
+            <p className="text-xs text-gray-500">Profit / Unité</p>
+            <p className={`font-bold tabular-nums ${isProfitable ? 'text-emerald-600' : 'text-red-600'}`}>
+              {formatCurrency(metrics.profit_unite_dzd, 'DZD')}
+            </p>
+            <p className="text-xs text-gray-500">{formatCurrency(metrics.profit_unite_usd, 'USD')}</p>
+          </div>
+          <div className="bg-white p-3 rounded-lg">
+            <p className="text-xs text-gray-500">ROAS</p>
+            <p className={`font-bold tabular-nums ${roasGood ? 'text-emerald-600' : 'text-red-600'}`}>
+              {formatNumber(metrics.roas, 2)}x
+            </p>
+            <p className="text-xs text-gray-500">Seuil: {formatNumber(metrics.break_even_roas, 2)}x</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2 mt-2">
+          <div className="bg-white p-2 rounded text-center">
+            <p className="text-xs text-gray-500">CPR</p>
+            <p className="font-bold text-sm tabular-nums">${formatNumber(metrics.cpr_usd, 2)}</p>
+          </div>
+          <div className="bg-white p-2 rounded text-center">
+            <p className="text-xs text-gray-500">CPR CAP</p>
+            <p className="font-bold text-sm tabular-nums text-blue-600">${formatNumber(metrics.cpr_cap_usd, 2)}</p>
+            <p className="text-xs text-gray-400">{formatNumber(metrics.cpr_cap_dzd, 0)} DZD</p>
+          </div>
+          <div className="bg-white p-2 rounded text-center">
+            <p className="text-xs text-gray-500">CPC</p>
+            <p className="font-bold text-sm tabular-nums">${formatNumber(metrics.cpc, 2)}</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+=========================================
+📁 FILE: src/components/Sidebar.jsx
+=========================================
+
+import { NavLink } from 'react-router-dom';
+import { useState } from 'react';
+import { 
+  LayoutDashboard, PlusCircle, History, BarChart3, Package, 
+  Truck, Users, Settings, Calculator, Menu, X, LogOut 
+} from 'lucide-react';
+
+const navItems = [
+  { path: '/', label: 'Tableau de Bord', icon: LayoutDashboard },
+  { path: '/entry', label: 'Nouvelle Entrée', icon: PlusCircle },
+  { path: '/history', label: 'Historique', icon: History },
+  { path: '/analytics', label: 'Analytiques', icon: BarChart3 },
+  { path: '/products', label: 'Produits', icon: Package },
+  { path: '/suppliers', label: 'Fournisseurs', icon: Truck },
+  { path: '/customers', label: 'Clients', icon: Users },
+  { path: '/break-even', label: 'Calculateur', icon: Calculator },
+  { path: '/settings', label: 'Paramètres', icon: Settings },
+];
+
+export function Sidebar() {
+  const [isOpen, setIsOpen] = useState(false);
+
+  return (
+    <>
+      <button 
+        onClick={() => setIsOpen(!isOpen)}
+        className="lg:hidden fixed top-4 left-4 z-50 p-2 bg-white rounded-lg shadow-md"
+      >
+        {isOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+      </button>
+
+      <aside className={`
+        fixed lg:static inset-y-0 left-0 z-40 w-64 bg-slate-900 text-white transform transition-transform
+        ${isOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+      `}>
+        <div className="p-6">
+          <h1 className="text-xl font-bold text-blue-400">ERP-Pro</h1>
+          <p className="text-xs text-slate-400 mt-1">Gestion COD Algérie</p>
+        </div>
+
+        <nav className="px-4 space-y-1">
+          {navItems.map(item => (
+            <NavLink
+              key={item.path}
+              to={item.path}
+              onClick={() => setIsOpen(false)}
+              className={({ isActive }) => `
+                flex items-center gap-3 px-4 py-3 rounded-lg text-sm font-medium transition-colors
+                ${isActive ? 'bg-blue-600 text-white' : 'text-slate-300 hover:bg-slate-800 hover:text-white'}
+              `}
+            >
+              <item.icon className="w-5 h-5" />
+              {item.label}
+            </NavLink>
+          ))}
+        </nav>
+
+        <div className="absolute bottom-0 left-0 right-0 p-4">
+          <button className="flex items-center gap-3 px-4 py-3 text-sm text-slate-400 hover:text-white w-full">
+            <LogOut className="w-5 h-5" />
+            Déconnexion
+          </button>
+        </div>
+      </aside>
+
+      {isOpen && (
+        <div className="fixed inset-0 bg-black/50 z-30 lg:hidden" onClick={() => setIsOpen(false)} />
+      )}
+    </>
+  );
+}
+
+
+=========================================
+📁 FILE: src/components/ui/Badge.jsx
+=========================================
+
+export function Badge({ children, variant = 'default' }) {
+  const variants = {
+    default: 'bg-gray-100 text-gray-700',
+    success: 'bg-emerald-100 text-emerald-700',
+    danger: 'bg-red-100 text-red-700',
+    warning: 'bg-amber-100 text-amber-700',
+    info: 'bg-blue-100 text-blue-700'
+  };
+
+  return (
+    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${variants[variant]}`}>
+      {children}
+    </span>
+  );
+}
+
+
+=========================================
+📁 FILE: src/components/ui/Button.jsx
+=========================================
+
+export function Button({ children, variant = 'primary', className = '', ...props }) {
+  const variants = {
+    primary: 'btn-primary',
+    danger: 'btn-danger',
+    outline: 'px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors font-medium text-gray-700',
+    ghost: 'px-4 py-2 hover:bg-gray-100 rounded-lg transition-colors font-medium text-gray-600'
+  };
+
+  return (
+    <button className={`${variants[variant]} ${className} disabled:opacity-50 disabled:cursor-not-allowed`} {...props}>
+      {children}
+    </button>
+  );
+}
+
+
+=========================================
+📁 FILE: src/components/ui/Input.jsx
+=========================================
+
+export function Input({ label, type = 'text', error, className = '', ...props }) {
+  return (
+    <div className={className}>
+      {label && <label className="block text-sm font-medium text-gray-700 mb-1">{label}</label>}
+      <input type={type} className={`input-field ${error ? 'border-red-500' : ''}`} {...props} />
+      {error && <span className="text-xs text-red-500 mt-1">{error}</span>}
+    </div>
+  );
+}
+
+
+=========================================
+📁 FILE: src/components/ui/Toast.jsx
+=========================================
+
+import { useEffect } from 'react';
+import { X, CheckCircle, AlertTriangle, AlertCircle } from 'lucide-react';
+
+export function Toast({ message, type = 'success', onClose, duration = 3000 }) {
+  useEffect(() => {
+    const timer = setTimeout(onClose, duration);
+    return () => clearTimeout(timer);
+  }, [duration, onClose]);
+
+  const icons = {
+    success: <CheckCircle className="w-5 h-5 text-emerald-500" />,
+    warning: <AlertTriangle className="w-5 h-5 text-amber-500" />,
+    error: <AlertCircle className="w-5 h-5 text-red-500" />
+  };
+
+  const bgColors = {
+    success: 'bg-emerald-50 border-emerald-200',
+    warning: 'bg-amber-50 border-amber-200',
+    error: 'bg-red-50 border-red-200'
+  };
+
+  return (
+    <div className={`fixed top-4 right-4 z-50 flex items-center gap-3 px-4 py-3 rounded-lg border shadow-lg ${bgColors[type]} animate-slide-in`}>
+      {icons[type]}
+      <span className="text-sm font-medium text-gray-800">{message}</span>
+      <button onClick={onClose} className="ml-2 text-gray-400 hover:text-gray-600">
+        <X className="w-4 h-4" />
+      </button>
+    </div>
+  );
+}
+
+
+=========================================
+📁 FILE: src/hooks/useApi.js
+=========================================
+
+import { useState, useEffect, useCallback } from 'react';
+import axios from 'axios';
+
+const API_BASE = import.meta.env.VITE_API_URL || '';
+
+const api = axios.create({
+  baseURL: API_BASE,
+  headers: { 'Content-Type': 'application/json' }
+});
+
+export function useApi(endpoint) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const fetch = useCallback(async (params = {}) => {
+    setLoading(true);
+    try {
+      const res = await api.get(endpoint, { params });
+      setData(res.data);
+      setError(null);
+      return res.data;
+    } catch (err) {
+      setError(err.message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  }, [endpoint]);
+
+  const create = async (payload) => {
+    const res = await api.post(endpoint, payload);
+    return res.data;
+  };
+
+  const remove = async (id) => {
+    await api.delete(`${endpoint}/${id}`);
+  };
+
+  const bulkRemove = async (ids) => {
+    await api.delete(`${endpoint}/bulk/delete`, { data: { ids } });
+  };
+
+  return { data, loading, error, fetch, create, remove, bulkRemove, refresh: fetch };
+}
+
+export { api };
+
+
+=========================================
+📁 FILE: src/hooks/useCalculator.js
+=========================================
+
+import { useState, useMemo } from 'react';
+import { calculateCOD } from '../utils/calculator';
+
+export function useCalculator(initialValues = {}, exchangeRate = 250) {
+  const [values, setValues] = useState({
+    orders: 0,
+    confirmation_rate: 70,
+    delivery_rate: 70,
+    ad_spend_usd: 0,
+    clicks: 0,
+    selling_price_dzd: 4900,
+    product_cost_dzd: 3400,
+    ...initialValues
+  });
+
+  const updateValue = (field, value) => {
+    setValues(prev => {
+      const next = { ...prev, [field]: Number(value) || 0 };
+      if (field === 'orders' || field === 'ad_spend_usd') {
+        next.cpr_usd = next.orders > 0 ? next.ad_spend_usd / next.orders : 0;
+      }
+      return next;
+    });
+  };
+
+  const metrics = useMemo(() => calculateCOD(values, exchangeRate), [values, exchangeRate]);
+
+  return { values, updateValue, metrics, setValues };
+}
+
+
+=========================================
+📁 FILE: src/hooks/useSettings.js
+=========================================
+
+import { useState, useEffect } from 'react';
+import { api } from './useApi';
+
+export function useSettings() {
+  const [settings, setSettings] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadSettings();
+  }, []);
+
+  const loadSettings = async () => {
+    try {
+      const res = await api.get('/api/settings');
+      setSettings(res.data);
+    } catch (err) {
+      console.error('Failed to load settings:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const updateSettings = async (updates) => {
+    const res = await api.put('/api/settings', updates);
+    setSettings(res.data);
+    return res.data;
+  };
+
+  return { settings, loading, updateSettings, refresh: loadSettings };
+}
+
+
+=========================================
+📁 FILE: src/index.html
+=========================================
+
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <script>
+      window.onerror = function(msg, url, line, col, error) {
+        document.addEventListener("DOMContentLoaded", function() {
+          document.body.innerHTML = "<div style=\"background:#ffe6e6; border:2px solid red; padding:20px; font-family:monospace; margin:20px;\"><h2>🚨 FATAL RUNTIME ERROR</h2><p><b>Message:</b> " + msg + "</p><p><b>File:</b> " + url + "</p><p><b>Line:</b> " + line + "</p></div>";
+        });
+      };
+    </script>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <title>ERP-Pro | Gestion COD Algérie</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/main.jsx"></script>
+  </body>
+</html>
+
+
+=========================================
+📁 FILE: src/main.jsx
+=========================================
+
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import { BrowserRouter } from 'react-router-dom';
+import App from './App';
+import './index.css';
+
+ReactDOM.createRoot(document.getElementById('root')).render(
+  <React.StrictMode>
+    <BrowserRouter>
+      <App />
+    </BrowserRouter>
+  </React.StrictMode>
+);
+
+
+=========================================
+📁 FILE: src/pages/Analytics.jsx
+=========================================
+
+import { useState, useEffect } from 'react';
+import { useApi } from '../hooks/useApi';
+import { useSettings } from '../hooks/useSettings';
+import { RevenueChart } from '../components/Charts/RevenueChart';
+import { ROASChart } from '../components/Charts/ROASChart';
+import { CostChart } from '../components/Charts/CostChart';
+import { Button } from '../components/ui/Button';
+import { format, subDays } from 'date-fns';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { formatNumber } from '../utils/calculator';
+
+export function Analytics() {
+  const { data: entries, fetch } = useApi('/api/entries');
+  const { settings } = useSettings();
+  const [range, setRange] = useState('30d');
+  const [filteredData, setFilteredData] = useState([]);
+
+  useEffect(() => { fetch(); }, []);
+
+  useEffect(() => {
+    if (!entries) return;
+    const now = new Date();
+    let start;
+    switch (range) {
+      case '7d': start = subDays(now, 7); break;
+      case '30d': start = subDays(now, 30); break;
+      case '90d': start = subDays(now, 90); break;
+      default: start = subDays(now, 30);
+    }
+    const filtered = entries.filter(e => new Date(e.date) >= start);
+    setFilteredData(filtered);
+  }, [entries, range]);
+
+  const exchangeRate = settings?.exchange_rate || 250;
+
+  const profitPerUnitData = filteredData.map(row => {
+    const delivered = row.orders * (row.confirmation_rate / 100) * (row.delivery_rate / 100);
+    const revenue = delivered * row.selling_price_dzd;
+    const cost = delivered * row.product_cost_dzd + row.ad_spend_usd * exchangeRate;
+    const profitPerUnit = delivered > 0 ? (revenue - cost) / delivered : 0;
+    return { date: row.date, profitPerUnit: Number(profitPerUnit.toFixed(2)) };
+  });
+
+  return (
+    <div className="p-6 space-y-6">
+      <div className="flex flex-wrap gap-2">
+        {['7d', '30d', '90d'].map(r => (
+          <Button 
+            key={r} 
+            variant={range === r ? 'primary' : 'outline'}
+            onClick={() => setRange(r)}
+          >
+            {r === '7d' ? '7 Jours' : r === '30d' ? '30 Jours' : '90 Jours'}
+          </Button>
+        ))}
+      </div>
+
+      <div className="grid lg:grid-cols-2 gap-6">
+        <RevenueChart data={filteredData} exchangeRate={exchangeRate} />
+        <ROASChart data={filteredData} />
+        <CostChart data={filteredData} exchangeRate={exchangeRate} />
+        <div className="card h-96">
+          <h3 className="font-bold text-lg mb-4">Profit par Unité</h3>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={profitPerUnitData}>
+              <CartesianGrid strokeDasharray="3 3" />
+              <XAxis dataKey="date" />
+              <YAxis />
+              <Tooltip formatter={v => formatNumber(v, 2)} />
+              <Line type="monotone" dataKey="profitPerUnit" name="Profit/Unité DZD" stroke="#059669" strokeWidth={2} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+=========================================
+📁 FILE: src/pages/BreakEvenCalculator.jsx
+=========================================
+
+import { useState, useEffect } from 'react';
+import { Calculator, Package, Target } from 'lucide-react';
+import { API_URL } from '../utils/constants';
+import { formatNumber, formatCurrency } from '../utils/formatter';
+import { calculateAccountingBreakEven, calculateInvestmentBreakEven, calculateBreakEvenProgress } from '../utils/calculator';
+
+export default function BreakEvenCalculator() {
+  const [products, setProducts] = useState([]);
+  const [selectedProductId, setSelectedProductId] = useState('');
+  const [values, setValues] = useState({
+    selling_price: 4900,
+    product_cost: 3400,
+    ad_spend: 50,
+    confirmation_rate: 70,
+    delivery_rate: 70,
+    target_profit: 0
+  });
+
+  useEffect(() => {
+    fetch(`${API_URL}/api/products`).then(r => r.json()).then(data => setProducts(data));
+  }, []);
+
+  useEffect(() => {
+    if (selectedProductId) {
+      const p = products.find(x => x.id == selectedProductId);
+      if (p) {
+        setValues(v => ({
+          ...v,
+          selling_price: p.selling_price_dzd,
+          product_cost: p.cost_price_dzd
+        }));
+      }
+    }
+  }, [selectedProductId, products]);
+
+  const exchangeRate = 250;
+  const marginPerUnit = values.selling_price - values.product_cost;
+  const cprCap = marginPerUnit * (values.delivery_rate / 100);
+  const breakEvenROAS = values.product_cost / values.selling_price;
+  
+  const selectedProduct = products.find(p => p.id == selectedProductId);
+  const totalInventoryCost = selectedProduct?.total_inventory_investment || 0;
+  const totalDelivered = selectedProduct?.total_delivered || 0;
+  
+  const accountingBE = calculateAccountingBreakEven(values.ad_spend, values.selling_price, values.product_cost, exchangeRate);
+  const investmentBE = calculateInvestmentBreakEven(totalInventoryCost, values.ad_spend, values.selling_price, values.product_cost, exchangeRate);
+  
+  const progressAccounting = calculateBreakEvenProgress(totalDelivered, accountingBE);
+  const progressInvestment = calculateBreakEvenProgress(totalDelivered, investmentBE);
+
+  const targetMargin = marginPerUnit * (values.confirmation_rate / 100) * (values.delivery_rate / 100);
+  const ordersNeeded = targetMargin > 0 && values.target_profit >= 0
+    ? (values.ad_spend * exchangeRate + values.target_profit) / targetMargin
+    : 0;
+  const confirmedNeeded = ordersNeeded * (values.confirmation_rate / 100);
+  const deliveredNeeded = ordersNeeded * (values.confirmation_rate / 100) * (values.delivery_rate / 100);
+
+  return (
+    <div className="space-y-6 max-w-4xl">
+      <h1 className="text-2xl font-bold flex items-center gap-2">
+        <Calculator className="w-6 h-6" /> Calculateur Seuil de Rentabilité
+      </h1>
+
+      <div className="card">
+        <label className="block text-sm text-gray-400 mb-2">Sélectionner un produit (optionnel)</label>
+        <select className="input w-full" value={selectedProductId} onChange={e => setSelectedProductId(e.target.value)}>
+          <option value="">-- Produit manuel --</option>
+          {products.map(p => (
+            <option key={p.id} value={p.id}>
+              {p.name} (Stock: {p.remaining_stock} | Investi: {formatCurrency(p.total_inventory_investment, 'DZD')})
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="card space-y-4">
+          <h3 className="font-semibold text-gray-300">Paramètres</h3>
+          {[
+            { label: 'Prix de Vente (DZD)', key: 'selling_price' },
+            { label: 'Coût Produit (DZD)', key: 'product_cost' },
+            { label: 'Dépenses Pub (USD)', key: 'ad_spend' },
+            { label: 'Taux Confirmation (%)', key: 'confirmation_rate' },
+            { label: 'Taux Livraison (%)', key: 'delivery_rate' },
+            { label: 'Profit Cible (DZD)', key: 'target_profit' },
+          ].map(field => (
+            <div key={field.key}>
+              <label className="block text-xs text-gray-400 mb-1">{field.label}</label>
+              <input type="number" className="input w-full" value={values[field.key]} onChange={e => setValues({...values, [field.key]: Number(e.target.value)})} />
+            </div>
+          ))}
+        </div>
+
+        <div className="space-y-4">
+          <div className="card border-l-4 border-green-500">
+            <div className="flex items-center gap-2 mb-2 text-green-400">
+              <Target className="w-5 h-5" />
+              <h3 className="font-semibold">Seuil Comptable (Rentable)</h3>
+            </div>
+            <p className="text-xs text-gray-400 mb-3">Unités à livrer pour couvrir la pub. L'invendu reste un actif.</p>
+            <div className="text-3xl font-bold text-white mb-1">
+              {formatNumber(accountingBE, 1)} <span className="text-lg font-normal text-gray-400">livrées</span>
+            </div>
+            {selectedProductId && (
+              <div className="mt-3">
+                <div className="flex justify-between text-xs text-gray-400 mb-1">
+                  <span>Progression: {formatNumber(totalDelivered, 1)} / {formatNumber(accountingBE, 1)}</span>
+                  <span>{formatNumber(progressAccounting, 0)}%</span>
+                </div>
+                <div className="w-full bg-gray-700 rounded-full h-2">
+                  <div className="bg-green-500 h-2 rounded-full transition-all" style={{ width: `${Math.min(100, progressAccounting)}%` }} />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="card border-l-4 border-blue-500">
+            <div className="flex items-center gap-2 mb-2 text-blue-400">
+              <Package className="w-5 h-5" />
+              <h3 className="font-semibold">Récupération Investissement</h3>
+            </div>
+            <p className="text-xs text-gray-400 mb-3">Unités à livrer pour récupérer l'inventaire total + la pub (cash-flow).</p>
+            <div className="text-3xl font-bold text-white mb-1">
+              {formatNumber(investmentBE, 1)} <span className="text-lg font-normal text-gray-400">livrées</span>
+            </div>
+            <div className="text-sm text-gray-400">Inventaire: {formatCurrency(totalInventoryCost, 'DZD')}</div>
+            {selectedProductId && (
+              <div className="mt-3">
+                <div className="flex justify-between text-xs text-gray-400 mb-1">
+                  <span>Progression: {formatNumber(totalDelivered, 1)} / {formatNumber(investmentBE, 1)}</span>
+                  <span>{formatNumber(progressInvestment, 0)}%</span>
+                </div>
+                <div className="w-full bg-gray-700 rounded-full h-2">
+                  <div className="bg-blue-500 h-2 rounded-full transition-all" style={{ width: `${Math.min(100, progressInvestment)}%` }} />
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="card grid grid-cols-2 gap-4">
+            <div>
+              <div className="text-xs text-gray-400">Marge / Unité</div>
+              <div className="text-xl font-semibold">{formatCurrency(marginPerUnit, 'DZD')}</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-400">CPR CAP</div>
+              <div className="text-xl font-semibold">{formatNumber(cprCap, 0)} DZD</div>
+            </div>
+            <div>
+              <div className="text-xs text-gray-400">Break Even ROAS</div>
+              <div className="text-xl font-semibold">{formatNumber(breakEvenROAS, 2)}x</div>
+            </div>
+          </div>
+
+          {values.target_profit > 0 && (
+            <div className="card border-l-4 border-purple-500">
+              <h3 className="font-semibold text-purple-400 mb-2">Pour un profit de {formatCurrency(values.target_profit, 'DZD')}</h3>
+              <div className="text-2xl font-bold">{Math.ceil(ordersNeeded)} commandes</div>
+              <div className="text-sm text-gray-400">→ {formatNumber(confirmedNeeded, 1)} confirmées → {formatNumber(deliveredNeeded, 1)} livrées</div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+=========================================
+📁 FILE: src/pages/Customers.jsx
+=========================================
+
+import { useEffect } from 'react';
+import { useApi } from '../hooks/useApi';
+import { Users, Phone, MapPin, ShoppingBag } from 'lucide-react';
+
+export function Customers() {
+  const { data: customers, fetch, loading } = useApi('/api/customers');
+
+  useEffect(() => { fetch(); }, []);
+
+  if (loading) return <div className="p-6">Chargement...</div>;
+
+  return (
+    <div className="p-6 space-y-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {customers?.map(customer => (
+          <div key={customer.id} className="card">
+            <div className="flex items-start gap-3">
+              <div className="p-3 bg-emerald-100 rounded-lg">
+                <Users className="w-6 h-6 text-emerald-600" />
+              </div>
+              <div className="flex-1">
+                <h4 className="font-bold text-gray-900">{customer.name || 'Client ' + customer.phone}</h4>
+                <div className="mt-2 space-y-1 text-sm text-gray-600">
+                  <p className="flex items-center gap-2"><Phone className="w-4 h-4" /> {customer.phone}</p>
+                  <p className="flex items-center gap-2"><MapPin className="w-4 h-4" /> {customer.wilaya || '-'}</p>
+                </div>
+                <div className="mt-3 flex gap-4 text-sm">
+                  <span className="flex items-center gap-1 text-blue-600 font-medium">
+                    <ShoppingBag className="w-4 h-4" /> {customer.orders_count} cmd
+                  </span>
+                  <span className="font-bold tabular-nums">{customer.total_spent_dzd?.toLocaleString('fr-FR')} DZD</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+
+=========================================
+📁 FILE: src/pages/Dashboard.jsx
+=========================================
+
+import { useEffect } from 'react';
+import { useApi } from '../hooks/useApi';
+import { useSettings } from '../hooks/useSettings';
+import { KPICard } from '../components/KPICard';
+import { DataTable } from '../components/DataTable';
+import { RevenueChart } from '../components/Charts/RevenueChart';
+import { calculateCOD, formatNumber } from '../utils/calculator';
+import { ShoppingCart, TrendingUp, DollarSign } from 'lucide-react';
+
+export function Dashboard() {
+  const { data: entries, fetch: fetchEntries, loading } = useApi('/api/entries');
+  const { settings } = useSettings();
+  const exchangeRate = settings?.exchange_rate || 250;
+
+  useEffect(() => { fetchEntries(); }, []);
+
+  const totals = entries?.reduce((acc, entry) => {
+    const m = calculateCOD(entry, exchangeRate);
+    acc.orders += entry.orders;
+    acc.delivered += m.livrees;
+    acc.revenue += m.revenu_dzd;
+    acc.profit += m.profit_net_dzd;
+    acc.adSpend += m.depenses_pub_usd;
+    return acc;
+  }, { orders: 0, delivered: 0, revenue: 0, profit: 0, adSpend: 0 }) || { orders: 0, delivered: 0, revenue: 0, profit: 0, adSpend: 0 };
+
+  const recentEntries = entries?.slice(0, 5) || [];
+
+  useEffect(() => {
+    fetch(`${API_URL}/api/products`).then(r => r.json()).then(setProducts);
+  }, []);
+
+  return (
+    <div className="p-6 space-y-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <KPICard 
+          title="Commandes Totales" 
+          value={totals.orders} 
+          subtitle={`${formatNumber(totals.delivered, 0)} livrées`}
+        />
+        <KPICard 
+          title="Revenus (DZD)" 
+          value={totals.revenue} 
+          isCurrency 
+          currency="DZD"
+          type="info"
+        />
+        <KPICard 
+          title="Profit Net (DZD)" 
+          value={totals.profit} 
+          isCurrency 
+          currency="DZD"
+          type={totals.profit >= 0 ? 'profit' : 'loss'}
+        />
+        <KPICard 
+          title="ROAS Moyen" 
+          value={totals.adSpend > 0 ? (totals.revenue / exchangeRate) / totals.adSpend : 0} 
+          suffix="x"
+          type={totals.adSpend > 0 && (totals.revenue / exchangeRate) / totals.adSpend >= 3 ? 'profit' : 'warning'}
+        />
+      </div>
+
+      <div className="grid lg:grid-cols-3 gap-6">
+        <div className="lg:col-span-2">
+          <RevenueChart data={entries || []} exchangeRate={exchangeRate} />
+        </div>
+        <div className="card">
+          <h3 className="font-bold text-lg mb-4">Répartition des Coûts</h3>
+          {entries?.length > 0 && (
+            <div className="space-y-4">
+              {(() => {
+                const totalCost = totals.delivered * (entries[0]?.product_cost_dzd || 3400) + totals.adSpend * exchangeRate;
+                const productCost = totals.delivered * (entries[0]?.product_cost_dzd || 3400);
+                const adCost = totals.adSpend * exchangeRate;
+                return (
+                  <>
+                    <div>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span>Coût Produit</span>
+                        <span className="font-medium">{formatNumber((productCost/totalCost)*100, 1)}%</span>
+                      </div>
+                      <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                        <div className="h-full bg-amber-500" style={{ width: `${(productCost/totalCost)*100}%` }} />
+                      </div>
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-sm mb-1">
+                        <span>Publicité</span>
+                        <span className="font-medium">{formatNumber((adCost/totalCost)*100, 1)}%</span>
+                      </div>
+                      <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                        <div className="h-full bg-red-500" style={{ width: `${(adCost/totalCost)*100}%` }} />
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <div>
+        <h3 className="font-bold text-lg mb-4">Entrées Récentes</h3>
+        <DataTable 
+          data={recentEntries} 
+          exchangeRate={exchangeRate} 
+          loading={loading}
+          onDelete={() => {}}
+          onBulkDelete={() => {}}
+        />
+      </div>
+    </div>
+  );
+}
+
+
+=========================================
+📁 FILE: src/pages/Entry.jsx
+=========================================
+
+import { EntryForm } from '../components/EntryForm';
+import { useSettings } from '../hooks/useSettings';
+
+export function Entry() {
+  const { settings } = useSettings();
+
+  return (
+    <div className="p-6">
+      <EntryForm settings={settings} />
+    </div>
+  );
+}
+
+
+=========================================
+📁 FILE: src/pages/History.jsx
+=========================================
+
+import { useState, useEffect } from 'react';
+import { useApi } from '../hooks/useApi';
+import { useSettings } from '../hooks/useSettings';
+import { DataTable } from '../components/DataTable';
+import { Input } from '../components/ui/Input';
+import { Button } from '../components/ui/Button';
+import { Toast } from '../components/ui/Toast';
+import { Search, Filter } from 'lucide-react';
+
+export function History() {
+  const { data: entries, fetch, loading, remove, bulkRemove } = useApi('/api/entries');
+  const { settings } = useSettings();
+  const [search, setSearch] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [toast, setToast] = useState(null);
+
+  useEffect(() => { fetch(); }, []);
+
+  const handleSearch = () => {
+    fetch({ search, startDate, endDate });
+  };
+
+  const handleDelete = async (id) => {
+    if (!confirm('Supprimer cette entrée ?')) return;
+    try {
+      await remove(id);
+      setToast({ message: 'Entrée supprimée', type: 'success' });
+      fetch();
+    } catch (err) {
+      setToast({ message: 'Erreur de suppression', type: 'error' });
+    }
+  };
+
+  const handleBulkDelete = async (ids) => {
+    try {
+      await bulkRemove(ids);
+      setToast({ message: `${ids.length} entrées supprimées`, type: 'success' });
+      fetch();
+    } catch (err) {
+      setToast({ message: 'Erreur de suppression', type: 'error' });
+    }
+  };
+
+  return (
+    <div className="p-6 space-y-6">
+      {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+
+      <div className="card">
+        <div className="flex flex-wrap gap-4 items-end">
+          <div className="flex-1 min-w-[200px]">
+            <Input 
+              label="Recherche" 
+              placeholder="Campagne ou notes..." 
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </div>
+          <Input label="Du" type="date" value={startDate} onChange={e => setStartDate(e.target.value)} />
+          <Input label="Au" type="date" value={endDate} onChange={e => setEndDate(e.target.value)} />
+          <Button onClick={handleSearch} className="flex items-center gap-2">
+            <Filter className="w-4 h-4" /> Filtrer
+          </Button>
+        </div>
+      </div>
+
+      <DataTable 
+        data={entries || []} 
+        exchangeRate={settings?.exchange_rate || 250}
+        onDelete={handleDelete}
+        onBulkDelete={handleBulkDelete}
+        loading={loading}
+      />
+    </div>
+  );
+}
+
+
+=========================================
+📁 FILE: src/pages/Products.jsx
+=========================================
+
+import { useState, useEffect } from 'react';
+import { Plus, Package, Trash2, TrendingUp } from 'lucide-react';
+import { API_URL } from '../utils/constants';
+import { formatCurrency, formatNumber } from '../utils/formatter';
+
+export default function Products() {
+  const [products, setProducts] = useState([]);
+  const [suppliers, setSuppliers] = useState([]);
+  const [showForm, setShowForm] = useState(false);
+  const [showPurchaseForm, setShowPurchaseForm] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [form, setForm] = useState({ name: '', selling_price_dzd: '', cost_price_dzd: '', stock_quantity: 0, supplier_id: '' });
+  const [purchaseForm, setPurchaseForm] = useState({ product_id: '', quantity: '', cost_price_dzd: '', purchase_date: '', supplier_id: '', notes: '' });
+
+  useEffect(() => { fetchProducts(); fetchSuppliers(); }, []);
+
+  const fetchProducts = async () => {
+    const res = await fetch(`${API_URL}/api/products`);
+    const data = await res.json();
+    setProducts(data);
+  };
+
+  const fetchSuppliers = async () => {
+    const res = await fetch(`${API_URL}/api/suppliers`);
+    const data = await res.json();
+    setSuppliers(data);
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    await fetch(`${API_URL}/api/products`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(form)
+    });
+    setForm({ name: '', selling_price_dzd: '', cost_price_dzd: '', stock_quantity: 0, supplier_id: '' });
+    setShowForm(false);
+    fetchProducts();
+  };
+
+  const handlePurchase = async (e) => {
+    e.preventDefault();
+    await fetch(`${API_URL}/api/inventory`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(purchaseForm)
+    });
+    setPurchaseForm({ product_id: '', quantity: '', cost_price_dzd: '', purchase_date: '', supplier_id: '', notes: '' });
+    setShowPurchaseForm(false);
+    fetchProducts();
+  };
+
+  const handleDelete = async (id) => {
+    if (!confirm('Supprimer ce produit ?')) return;
+    await fetch(`${API_URL}/api/products/${id}`, { method: 'DELETE' });
+    fetchProducts();
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex justify-between items-center">
+        <h1 className="text-2xl font-bold flex items-center gap-2">
+          <Package className="w-6 h-6" /> Produits & Stock
+        </h1>
+        <button onClick={() => setShowForm(!showForm)} className="btn-primary flex items-center gap-2">
+          <Plus className="w-4 h-4" /> Nouveau Produit
+        </button>
+      </div>
+
+      {showForm && (
+        <form onSubmit={handleSubmit} className="card space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <input placeholder="Nom du produit" className="input" value={form.name} onChange={e => setForm({...form, name: e.target.value})} required />
+            <input placeholder="Prix de vente (DZD)" type="number" className="input" value={form.selling_price_dzd} onChange={e => setForm({...form, selling_price_dzd: e.target.value})} required />
+            <input placeholder="Coût produit (DZD)" type="number" className="input" value={form.cost_price_dzd} onChange={e => setForm({...form, cost_price_dzd: e.target.value})} required />
+            <select className="input" value={form.supplier_id} onChange={e => setForm({...form, supplier_id: e.target.value})}>
+              <option value="">Fournisseur (optionnel)</option>
+              {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          <div className="flex gap-2">
+            <button type="submit" className="btn-primary">Créer</button>
+            <button type="button" onClick={() => setShowForm(false)} className="btn-secondary">Annuler</button>
+          </div>
+        </form>
+      )}
+
+      {showPurchaseForm && selectedProduct && (
+        <form onSubmit={handlePurchase} className="card space-y-4 border-l-4 border-blue-500">
+          <h3 className="font-semibold text-lg">Achat de Stock — {selectedProduct.name}</h3>
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+            <input placeholder="Quantité" type="number" className="input" value={purchaseForm.quantity} onChange={e => setPurchaseForm({...purchaseForm, product_id: selectedProduct.id, quantity: e.target.value})} required />
+            <input placeholder="Coût unitaire (DZD)" type="number" className="input" value={purchaseForm.cost_price_dzd} onChange={e => setPurchaseForm({...purchaseForm, cost_price_dzd: e.target.value})} required />
+            <input placeholder="Date d'achat" type="date" className="input" value={purchaseForm.purchase_date} onChange={e => setPurchaseForm({...purchaseForm, purchase_date: e.target.value})} />
+            <select className="input" value={purchaseForm.supplier_id} onChange={e => setPurchaseForm({...purchaseForm, supplier_id: e.target.value})}>
+              <option value="">Fournisseur</option>
+              {suppliers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </select>
+          </div>
+          <input placeholder="Notes (optionnel)" className="input w-full" value={purchaseForm.notes} onChange={e => setPurchaseForm({...purchaseForm, notes: e.target.value})} />
+          <div className="flex gap-2">
+            <button type="submit" className="btn-primary">Enregistrer l'achat</button>
+            <button type="button" onClick={() => setShowPurchaseForm(false)} className="btn-secondary">Annuler</button>
+          </div>
+        </form>
+      )}
+
+      <div className="card overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-gray-700 text-left text-gray-400">
+              <th className="pb-3 pr-4">Produit</th>
+              <th className="pb-3 pr-4 text-right">Prix Vente</th>
+              <th className="pb-3 pr-4 text-right">Coût Unit.</th>
+              <th className="pb-3 pr-4 text-right">Total Acheté</th>
+              <th className="pb-3 pr-4 text-right">Total Livré</th>
+              <th className="pb-3 pr-4 text-right">Stock Restant</th>
+              <th className="pb-3 pr-4 text-right">Valeur Stock</th>
+              <th className="pb-3 pr-4 text-right">Investissement</th>
+              <th className="pb-3"></th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-700">
+            {products.map(p => (
+              <tr key={p.id} className="group">
+                <td className="py-3 pr-4 font-medium">{p.name}</td>
+                <td className="py-3 pr-4 text-right">{formatCurrency(p.selling_price_dzd, 'DZD')}</td>
+                <td className="py-3 pr-4 text-right">{formatCurrency(p.cost_price_dzd, 'DZD')}</td>
+                <td className="py-3 pr-4 text-right">{formatNumber(p.total_purchased, 0)}</td>
+                <td className="py-3 pr-4 text-right text-blue-400">{formatNumber(p.total_delivered, 1)}</td>
+                <td className="py-3 pr-4 text-right font-semibold text-green-400">{formatNumber(p.remaining_stock, 0)}</td>
+                <td className="py-3 pr-4 text-right text-gray-400">{formatCurrency((parseFloat(p.remaining_stock)||0)*(parseFloat(p.cost_price_dzd)||0), 'DZD')}</td>
+                <td className="py-3 pr-4 text-right text-yellow-400">{formatCurrency(p.total_inventory_investment, 'DZD')}</td>
+                <td className="py-3 text-right">
+                  <div className="flex gap-2 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button 
+                      onClick={() => { setSelectedProduct(p); setShowPurchaseForm(true); }}
+                      className="p-1.5 bg-blue-600/20 text-blue-400 rounded hover:bg-blue-600/30"
+                      title="Acheter du stock"
+                    >
+                      <TrendingUp className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => handleDelete(p.id)} className="p-1.5 bg-red-600/20 text-red-400 rounded hover:bg-red-600/30">
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+=========================================
+📁 FILE: src/pages/Settings.jsx
+=========================================
+
+import { useState, useEffect } from 'react';
+import { useSettings } from '../hooks/useSettings';
+import { Input } from '../components/ui/Input';
+import { Button } from '../components/ui/Button';
+import { Toast } from '../components/ui/Toast';
+import { Download, Moon, Sun } from 'lucide-react';
+
+export function Settings() {
+  const { settings, updateSettings, loading } = useSettings();
+  const [form, setForm] = useState({});
+  const [toast, setToast] = useState(null);
+
+  useEffect(() => {
+    if (settings) setForm(settings);
+  }, [settings]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await updateSettings(form);
+      setToast({ message: 'Paramètres enregistrés', type: 'success' });
+    } catch (err) {
+      setToast({ message: 'Erreur', type: 'error' });
+    }
+  };
+
+  const downloadBackup = () => {
+    window.open('/api/backup/download', '_blank');
+  };
+
+  if (loading) return <div className="p-6">Chargement...</div>;
+
+  return (
+    <div className="p-6 max-w-2xl space-y-6">
+      {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <div className="card">
+          <h3 className="font-bold text-lg mb-4">Paramètres Généraux</h3>
+          <div className="space-y-4">
+            <Input 
+              label="Nom de l'Entreprise" 
+              value={form.business_name || ''} 
+              onChange={e => setForm({...form, business_name: e.target.value})}
+            />
+            <Input 
+              label="Taux de Change DZD/USD" 
+              type="number" 
+              step="0.01"
+              value={form.exchange_rate || ''} 
+              onChange={e => setForm({...form, exchange_rate: Number(e.target.value)})}
+            />
+          </div>
+        </div>
+
+        <div className="card">
+          <h3 className="font-bold text-lg mb-4">Valeurs par Défaut</h3>
+          <div className="grid grid-cols-2 gap-4">
+            <Input label="Prix Vente DZD" type="number" value={form.default_price || ''} onChange={e => setForm({...form, default_price: Number(e.target.value)})} />
+            <Input label="Coût Produit DZD" type="number" value={form.default_cost || ''} onChange={e => setForm({...form, default_cost: Number(e.target.value)})} />
+            <Input label="Confirmation %" type="number" value={form.default_confirmation || ''} onChange={e => setForm({...form, default_confirmation: Number(e.target.value)})} />
+            <Input label="Livraison %" type="number" value={form.default_delivery || ''} onChange={e => setForm({...form, default_delivery: Number(e.target.value)})} />
+          </div>
+        </div>
+
+        <div className="card">
+          <h3 className="font-bold text-lg mb-4">Apparence</h3>
+          <div className="flex items-center gap-4">
+            <button
+              type="button"
+              onClick={() => setForm({...form, dark_mode: 0})}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg border ${form.dark_mode === 0 ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200'}`}
+            >
+              <Sun className="w-4 h-4" /> Clair
+            </button>
+            <button
+              type="button"
+              onClick={() => setForm({...form, dark_mode: 1})}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg border ${form.dark_mode === 1 ? 'border-blue-500 bg-blue-50 text-blue-700' : 'border-gray-200'}`}
+            >
+              <Moon className="w-4 h-4" /> Sombre
+            </button>
+          </div>
+        </div>
+
+        <Button type="submit" className="w-full">Enregistrer les Paramètres</Button>
+      </form>
+
+      <div className="card">
+        <h3 className="font-bold text-lg mb-4">Sauvegarde des Données</h3>
+        <div className="flex gap-4">
+          <Button variant="outline" onClick={downloadBackup} className="flex items-center gap-2">
+            <Download className="w-4 h-4" /> Télécharger Backup
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+=========================================
+📁 FILE: src/pages/Suppliers.jsx
+=========================================
+
+import { useState, useEffect } from 'react';
+import { useApi } from '../hooks/useApi';
+import { Input } from '../components/ui/Input';
+import { Button } from '../components/ui/Button';
+import { Toast } from '../components/ui/Toast';
+import { Truck, Phone, MapPin } from 'lucide-react';
+
+export function Suppliers() {
+  const { data: suppliers, fetch, create, remove } = useApi('/api/suppliers');
+  const [form, setForm] = useState({ name: '', phone: '', address: '', wilaya: '' });
+  const [toast, setToast] = useState(null);
+
+  useEffect(() => { fetch(); }, []);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await create(form);
+      setToast({ message: 'Fournisseur ajouté', type: 'success' });
+      setForm({ name: '', phone: '', address: '', wilaya: '' });
+      fetch();
+    } catch (err) {
+      setToast({ message: 'Erreur', type: 'error' });
+    }
+  };
+
+  return (
+    <div className="p-6 space-y-6">
+      {toast && <Toast {...toast} onClose={() => setToast(null)} />}
+
+      <div className="card">
+        <h3 className="font-bold text-lg mb-4">Nouveau Fournisseur</h3>
+        <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <Input label="Nom" value={form.name} onChange={e => setForm({...form, name: e.target.value})} required />
+          <Input label="Téléphone" value={form.phone} onChange={e => setForm({...form, phone: e.target.value})} />
+          <Input label="Wilaya" value={form.wilaya} onChange={e => setForm({...form, wilaya: e.target.value})} />
+          <Input label="Adresse" value={form.address} onChange={e => setForm({...form, address: e.target.value})} />
+          <div className="md:col-span-4">
+            <Button type="submit">Ajouter Fournisseur</Button>
+          </div>
+        </form>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        {suppliers?.map(supplier => (
+          <div key={supplier.id} className="card flex items-start justify-between">
+            <div className="flex items-start gap-3">
+              <div className="p-3 bg-amber-100 rounded-lg">
+                <Truck className="w-6 h-6 text-amber-600" />
+              </div>
+              <div>
+                <h4 className="font-bold text-gray-900">{supplier.name}</h4>
+                <div className="mt-2 space-y-1 text-sm text-gray-600">
+                  {supplier.phone && <p className="flex items-center gap-2"><Phone className="w-4 h-4" /> {supplier.phone}</p>}
+                  {supplier.wilaya && <p className="flex items-center gap-2"><MapPin className="w-4 h-4" /> {supplier.wilaya}</p>}
+                  {supplier.address && <p className="flex items-center gap-2"><MapPin className="w-4 h-4" /> {supplier.address}</p>}
+                </div>
+              </div>
+            </div>
+            <Button variant="ghost" onClick={() => remove(supplier.id).then(fetch)}>Supprimer</Button>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+
+=========================================
+📁 FILE: src/postcss.config.js
+=========================================
+
+export default {
+  plugins: {
+    tailwindcss: {},
+    autoprefixer: {},
+  },
+}
+
+=========================================
+📁 FILE: src/tailwind.config.js
+=========================================
+
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: [
+    "./index.html",
+    "./*.{js,ts,jsx,tsx}",
+    "./pages/**/*.{js,ts,jsx,tsx}",
+    "./components/**/*.{js,ts,jsx,tsx}",
+    "./utils/**/*.{js,ts,jsx,tsx}"
+  ],
+  theme: {
+    extend: {},
+  },
+  plugins: [],
+}
+
+
+=========================================
+📁 FILE: src/utils/calculator.js
+=========================================
+
+export function calculateCOD(entry, exchangeRate = 250) {
+  const orders = Number(entry.orders) || 0;
+  const confirmationRate = Number(entry.confirmation_rate) || 0;
+  const deliveryRate = Number(entry.delivery_rate) || 0;
+  const adSpendUSD = Number(entry.ad_spend_usd) || 0;
+  const clicks = Number(entry.clicks) || 0;
+  const sellingPriceDZD = Number(entry.selling_price_dzd) || 0;
+  const productCostDZD = Number(entry.product_cost_dzd) || 0;
+
+  const confirmed = orders * (confirmationRate / 100);
+  const delivered = confirmed * (deliveryRate / 100);
+  
+  const revenueDZD = delivered * sellingPriceDZD;
+  const productCostDeliveredDZD = delivered * productCostDZD;
+  const adSpendDZD = adSpendUSD * exchangeRate;
+  
+  const profitDZD = revenueDZD - productCostDeliveredDZD - adSpendDZD;
+  const profitUSD = profitDZD / exchangeRate;
+  
+  const profitPerUnitDZD = delivered > 0 ? profitDZD / delivered : 0;
+  const profitPerUnitUSD = profitPerUnitDZD / exchangeRate;
+  
+  const cprUSD = orders > 0 ? adSpendUSD / orders : 0;
+  const cprCapDZD = sellingPriceDZD - productCostDZD;
+  const cprCapUSD = cprCapDZD / exchangeRate;
+  const breakEvenROAS = cprCapDZD > 0 ? sellingPriceDZD / cprCapDZD : 0;
+  const costPerDeliveredUSD = delivered > 0 ? adSpendUSD / delivered : 0;
+  const roas = adSpendDZD > 0 ? revenueDZD / adSpendDZD : 0;
+  const rpc = clicks > 0 ? revenueDZD / clicks : 0;
+  const cpc = clicks > 0 ? adSpendUSD / clicks : 0;
+  const effectiveDeliveryRate = orders > 0 ? (delivered / orders) * 100 : 0;
+
+  return {
+    commandes: orders,
+    confirmees: confirmed,
+    livrees: delivered,
+    revenu_dzd: revenueDZD,
+    revenu_usd: revenueDZD / exchangeRate,
+    cout_produit_dzd: productCostDeliveredDZD,
+    cout_produit_usd: productCostDeliveredDZD / exchangeRate,
+    depenses_pub_usd: adSpendUSD,
+    depenses_pub_dzd: adSpendDZD,
+    profit_net_dzd: profitDZD,
+    profit_net_usd: profitUSD,
+    profit_unite_dzd: profitPerUnitDZD,
+    profit_unite_usd: profitPerUnitUSD,
+    cpr_usd: cprUSD,
+    cpr_cap_dzd: cprCapDZD,
+    cpr_cap_usd: cprCapUSD,
+    break_even_roas: breakEvenROAS,
+    cout_par_livree_usd: costPerDeliveredUSD,
+    roas,
+    rpc,
+    cpc,
+    taux_livraison_effectif: effectiveDeliveryRate,
+    clicks
+  };
+}
+
+export function formatNumber(num, decimals = 2) {
+  return new Intl.NumberFormat('fr-FR', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals
+  }).format(num);
+}
+
+export function formatCurrency(num, currency = 'DZD') {
+  const symbol = currency === 'USD' ? '$' : 'DZD';
+  const formatted = new Intl.NumberFormat('fr-FR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }).format(num);
+  return currency === 'USD' ? `${symbol}${formatted}` : `${formatted} ${symbol}`;
+}
+
+
+// ======================
+// INVENTORY & BREAK-EVEN
+// ======================
+
+export function calculateDelivered(orders, confirmationRate, deliveryRate) {
+  return orders * (confirmationRate / 100) * (deliveryRate / 100);
+}
+
+export function calculateAccountingBreakEven(adSpendUSD, sellingPriceDZD, productCostDZD, exchangeRate) {
+  const marginPerUnitDZD = sellingPriceDZD - productCostDZD;
+  const marginPerUnitUSD = marginPerUnitDZD / exchangeRate;
+  if (marginPerUnitUSD <= 0) return Infinity;
+  return adSpendUSD / marginPerUnitUSD;
+}
+
+export function calculateInvestmentBreakEven(totalInventoryCostDZD, totalAdSpendUSD, sellingPriceDZD, productCostDZD, exchangeRate) {
+  const marginPerUnitDZD = sellingPriceDZD - productCostDZD;
+  if (marginPerUnitDZD <= 0) return Infinity;
+  const totalAdSpendDZD = totalAdSpendUSD * exchangeRate;
+  const totalInvestment = totalInventoryCostDZD + totalAdSpendDZD;
+  return totalInvestment / marginPerUnitDZD;
+}
+
+export function calculateInventoryValue(remainingStock, costPriceDZD) {
+  return remainingStock * costPriceDZD;
+}
+
+export function calculateBreakEvenProgress(totalDelivered, breakEvenUnits) {
+  if (breakEvenUnits <= 0 || !isFinite(breakEvenUnits)) return 0;
+  return Math.min(100, (totalDelivered / breakEvenUnits) * 100);
+}
+
+
+=========================================
+📁 FILE: src/utils/constants.js
+=========================================
+
+export const API_URL = import.meta.env.VITE_API_URL || '';
+
+export const WILAYAS = [
+  "Adrar", "Chlef", "Laghouat", "Oum El Bouaghi", "Batna", "Béjaïa", "Biskra", "Béchar",
+  "Blida", "Bouira", "Tamanrasset", "Tébessa", "Tlemcen", "Tiaret", "Tizi Ouzou", "Alger",
+  "Djelfa", "Jijel", "Sétif", "Saïda", "Skikda", "Sidi Bel Abbès", "Annaba", "Guelma",
+  "Constantine", "Médéa", "Mostaganem", "M'Sila", "Mascara", "Ouargla", "Oran", "El Bayadh",
+  "Illizi", "Bordj Bou Arréridj", "Boumerdès", "El Tarf", "Tindouf", "Tissemsilt", "El Oued",
+  "Khenchela", "Souk Ahras", "Tipaza", "Mila", "Aïn Defla", "Naâma", "Aïn Témouchent",
+  "Ghardaïa", "Relizane", "Timimoun", "Bordj Badji Mokhtar", "Ouled Djellal", "Béni Abbès",
+  "In Salah", "In Guezzam", "Touggourt", "Djanet", "El M'Ghair", "El Meniaa"
+];
+
+export const PLATFORMS = ["Facebook", "Instagram", "TikTok", "Google", "Snapchat"];
+
+
+=========================================
+📁 FILE: src/utils/formatter.js
+=========================================
+
+export const formatCurrency = (amount) => {
+  if (amount === undefined || amount === null) return '$0.00';
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+  }).format(amount);
+};
+
+export const formatNumber = (number) => {
+  if (number === undefined || number === null) return '0';
+  return new Intl.NumberFormat('en-US').format(number);
+};
+
+
+=========================================
+📁 FILE: src/vite.config.js
+=========================================
+
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  plugins: [react()],
+  base: '/', // Guarantees assets are requested from the root URL
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true,
+    sourcemap: true, // Enables error tracing in the live browser console
+  }
+});
+
+
+=========================================
+📁 FILE: tailwind.config.js
+=========================================
+
+/** @type {import('tailwindcss').Config} */
+export default {
+  content: [
+    "./index.html",
+    "./src/**/*.{js,ts,jsx,tsx}",
+  ],
+  theme: {
+    extend: {},
+  },
+  plugins: [],
+}
+
+
+=========================================
+📁 FILE: vite.config.js
+=========================================
+
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+  server: {
+    port: 5173,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+      }
+    }
+  },
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true,
+  }
+})
