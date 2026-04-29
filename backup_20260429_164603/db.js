@@ -74,17 +74,6 @@ export async function initDatabase() {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     INSERT INTO settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
-    CREATE TABLE IF NOT EXISTS inventory_purchases (
-      id SERIAL PRIMARY KEY,
-      product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
-      quantity INTEGER NOT NULL,
-      cost_price_dzd REAL NOT NULL,
-      total_cost_dzd REAL NOT NULL,
-      purchase_date TEXT,
-      supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
-      notes TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
   `);
   client.release();
   console.log('PostgreSQL initialized');

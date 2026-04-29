@@ -5,28 +5,7 @@ const router = Router();
 router.get('/', async (req, res) => {
   try {
     const db = getDb();
-    const result = await db.query(`
-      SELECT 
-        p.*, 
-        s.name as supplier_name,
-        COALESCE(SUM(ip.quantity), 0) as total_purchased,
-        COALESCE(SUM(ip.total_cost_dzd), 0) as total_inventory_investment,
-        COALESCE((
-          SELECT SUM(e.orders * e.confirmation_rate / 100.0 * e.delivery_rate / 100.0) 
-          FROM entries e 
-          WHERE e.product_id = p.id
-        ), 0) as total_delivered,
-        COALESCE(SUM(ip.quantity), 0) - COALESCE((
-          SELECT SUM(e.orders * e.confirmation_rate / 100.0 * e.delivery_rate / 100.0) 
-          FROM entries e 
-          WHERE e.product_id = p.id
-        ), 0) as remaining_stock
-      FROM products p
-      LEFT JOIN suppliers s ON p.supplier_id = s.id
-      LEFT JOIN inventory_purchases ip ON ip.product_id = p.id
-      GROUP BY p.id, s.name
-      ORDER BY p.created_at DESC
-    `);
+    const result = await db.query('SELECT p.*, s.name as supplier_name FROM products p LEFT JOIN suppliers s ON p.supplier_id = s.id ORDER BY p.created_at DESC');
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: err.message });

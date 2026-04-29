@@ -26,10 +26,6 @@ export function Dashboard() {
 
   const recentEntries = entries?.slice(0, 5) || [];
 
-  useEffect(() => {
-    fetch(`${API_URL}/api/products`).then(r => r.json()).then(setProducts);
-  }, []);
-
   return (
     <div className="p-6 space-y-6">
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

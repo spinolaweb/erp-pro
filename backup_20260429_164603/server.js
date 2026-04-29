@@ -11,7 +11,6 @@ import suppliersRouter from './api/suppliers.js';
 import customersRouter from './api/customers.js';
 import campaignsRouter from './api/campaigns.js';
 import backupRouter from './api/backup.js';
-import inventoryRouter from './api/inventory.js';
 import authRouter from './api/auth.js';
 
 dotenv.config();
@@ -32,7 +31,6 @@ app.use('/api/suppliers', suppliersRouter);
 app.use('/api/customers', customersRouter);
 app.use('/api/campaigns', campaignsRouter);
 app.use('/api/backup', backupRouter);
-app.use('/api/inventory', inventoryRouter);
 
 app.use(express.static(path.join(__dirname, 'src/dist')));
 

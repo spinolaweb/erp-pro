@@ -72,36 +72,3 @@ export function formatCurrency(num, currency = 'DZD') {
   }).format(num);
   return currency === 'USD' ? `${symbol}${formatted}` : `${formatted} ${symbol}`;
 }
-
-
-// ======================
-// INVENTORY & BREAK-EVEN
-// ======================
-
-export function calculateDelivered(orders, confirmationRate, deliveryRate) {
-  return orders * (confirmationRate / 100) * (deliveryRate / 100);
-}
-
-export function calculateAccountingBreakEven(adSpendUSD, sellingPriceDZD, productCostDZD, exchangeRate) {
-  const marginPerUnitDZD = sellingPriceDZD - productCostDZD;
-  const marginPerUnitUSD = marginPerUnitDZD / exchangeRate;
-  if (marginPerUnitUSD <= 0) return Infinity;
-  return adSpendUSD / marginPerUnitUSD;
-}
-
-export function calculateInvestmentBreakEven(totalInventoryCostDZD, totalAdSpendUSD, sellingPriceDZD, productCostDZD, exchangeRate) {
-  const marginPerUnitDZD = sellingPriceDZD - productCostDZD;
-  if (marginPerUnitDZD <= 0) return Infinity;
-  const totalAdSpendDZD = totalAdSpendUSD * exchangeRate;
-  const totalInvestment = totalInventoryCostDZD + totalAdSpendDZD;
-  return totalInvestment / marginPerUnitDZD;
-}
-
-export function calculateInventoryValue(remainingStock, costPriceDZD) {
-  return remainingStock * costPriceDZD;
-}
-
-export function calculateBreakEvenProgress(totalDelivered, breakEvenUnits) {
-  if (breakEvenUnits <= 0 || !isFinite(breakEvenUnits)) return 0;
-  return Math.min(100, (totalDelivered / breakEvenUnits) * 100);
-}
