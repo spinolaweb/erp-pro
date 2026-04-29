@@ -1,0 +1,95 @@
+// utils/formatter.js
+// Shared formatting helpers for ERP-Pro (COD / Algeria context)
+
+/**
+ * Format a number as Algerian Dinar currency.
+ * @param {number|string} value
+ * @param {string} [currency='DZD']
+ * @returns {string}
+ */
+export function formatCurrency(value, currency = 'DZD') {
+  const num = parseFloat(value);
+  if (isNaN(num)) return '—';
+  return new Intl.NumberFormat('fr-DZ', {
+    style: 'currency',
+    currency,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(num);
+}
+
+/**
+ * Format a plain number with thousands separators.
+ * @param {number|string} value
+ * @param {number} [decimals=0]
+ * @returns {string}
+ */
+export function formatNumber(value, decimals = 0) {
+  const num = parseFloat(value);
+  if (isNaN(num)) return '—';
+  return new Intl.NumberFormat('fr-DZ', {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  }).format(num);
+}
+
+/**
+ * Format a value as a percentage string.
+ * @param {number|string} value  (0–100 scale)
+ * @param {number} [decimals=1]
+ * @returns {string}
+ */
+export function formatPercent(value, decimals = 1) {
+  const num = parseFloat(value);
+  if (isNaN(num)) return '—';
+  return `${num.toFixed(decimals)}%`;
+}
+
+/**
+ * Format a Date or ISO string as a localized date (Algerian French locale).
+ * @param {Date|string|number} value
+ * @param {'short'|'medium'|'long'} [style='medium']
+ * @returns {string}
+ */
+export function formatDate(value, style = 'medium') {
+  if (!value) return '—';
+  const date = value instanceof Date ? value : new Date(value);
+  if (isNaN(date.getTime())) return String(value);
+  const options = {
+    short:  { day: '2-digit', month: '2-digit', year: 'numeric' },
+    medium: { day: 'numeric', month: 'short', year: 'numeric' },
+    long:   { day: 'numeric', month: 'long', year: 'numeric', weekday: 'long' },
+  }[style] || {};
+  return new Intl.DateTimeFormat('fr-DZ', options).format(date);
+}
+
+/**
+ * Truncate a string to a max length and append ellipsis.
+ * @param {string} str
+ * @param {number} [max=50]
+ * @returns {string}
+ */
+export function truncate(str, max = 50) {
+  if (!str) return '';
+  return str.length > max ? str.slice(0, max - 1) + '…' : str;
+}
+
+/**
+ * Compute COD profit for one campaign row.
+ * Profit = (Livrées × Prix_Vente) − (Livrées × Coût_Produit) − Dépenses_Pub_Total
+ * Livrées = Commandes × (Confirmation% / 100) × (Livraison% / 100)
+ */
+export function computeCODProfit({
+  commandes = 0,
+  confirmationRate = 0,  // 0–100
+  livraisonRate = 0,     // 0–100
+  prixVente = 0,
+  coutProduit = 0,
+  depensesPub = 0,
+}) {
+  const livrees = commandes * (confirmationRate / 100) * (livraisonRate / 100);
+  const revenue = livrees * prixVente;
+  const cost    = livrees * coutProduit;
+  const profit  = revenue - cost - depensesPub;
+  return { livrees, revenue, cost, profit };
+}
