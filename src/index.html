@@ -1,6 +1,13 @@
 <!DOCTYPE html>
 <html lang="fr">
   <head>
+    <script>
+      window.onerror = function(msg, url, line, col, error) {
+        document.addEventListener("DOMContentLoaded", function() {
+          document.body.innerHTML = "<div style=\"background:#ffe6e6; border:2px solid red; padding:20px; font-family:monospace; margin:20px;\"><h2>🚨 FATAL RUNTIME ERROR</h2><p><b>Message:</b> " + msg + "</p><p><b>File:</b> " + url + "</p><p><b>Line:</b> " + line + "</p></div>";
+        });
+      };
+    </script>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
