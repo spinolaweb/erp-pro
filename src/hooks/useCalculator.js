@@ -10,6 +10,8 @@ export function useCalculator(initialValues = {}, exchangeRate = 250) {
     clicks: 0,
     selling_price_dzd: 4900,
     product_cost_dzd: 3400,
+    service_cost_dzd: 100,
+    stock_campagne: 150,
     ...initialValues
   });
 
