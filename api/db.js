@@ -34,6 +34,7 @@ export async function initDatabase() {
       product_cost_dzd REAL NOT NULL,
       notes TEXT,
       product_id INTEGER,
+      campaign_quantity INTEGER DEFAULT 0,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE IF NOT EXISTS products (
@@ -74,20 +75,12 @@ export async function initDatabase() {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     INSERT INTO settings (id) VALUES (1) ON CONFLICT (id) DO NOTHING;
-    CREATE TABLE IF NOT EXISTS inventory_purchases (
-      id SERIAL PRIMARY KEY,
-      product_id INTEGER REFERENCES products(id) ON DELETE CASCADE,
-      quantity INTEGER NOT NULL,
-      cost_price_dzd REAL NOT NULL,
-      total_cost_dzd REAL NOT NULL,
-      purchase_date TEXT,
-      supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
-      notes TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    );
+    
+    -- Safely add the new column to existing databases
+    ALTER TABLE entries ADD COLUMN IF NOT EXISTS campaign_quantity INTEGER DEFAULT 0;
   `);
   client.release();
-  console.log('PostgreSQL initialized');
+  console.log('PostgreSQL initialized & updated with campaign_quantity');
 }
 
 export function getDb() {

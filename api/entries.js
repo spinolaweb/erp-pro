@@ -25,11 +25,11 @@ router.get('/', async (req, res) => {
 router.post('/', async (req, res) => {
   try {
     const db = getDb();
-    const { date, campaign, orders, confirmation_rate, delivery_rate, ad_spend_usd, cpr_usd, clicks, selling_price_dzd, product_cost_dzd, notes, product_id } = req.body;
+    const { date, campaign, orders, confirmation_rate, delivery_rate, ad_spend_usd, cpr_usd, clicks, selling_price_dzd, product_cost_dzd, notes, product_id, campaign_quantity } = req.body;
     const calculatedCpr = orders > 0 ? ad_spend_usd / orders : 0;
     const result = await db.query(
-      'INSERT INTO entries (date, campaign, orders, confirmation_rate, delivery_rate, ad_spend_usd, cpr_usd, clicks, selling_price_dzd, product_cost_dzd, notes, product_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING *',
-      [date, campaign, orders, confirmation_rate, delivery_rate, ad_spend_usd, cpr_usd || calculatedCpr, clicks || 0, selling_price_dzd, product_cost_dzd, notes, product_id]
+      'INSERT INTO entries (date, campaign, orders, confirmation_rate, delivery_rate, ad_spend_usd, cpr_usd, clicks, selling_price_dzd, product_cost_dzd, notes, product_id, campaign_quantity) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) RETURNING *',
+      [date, campaign, orders, confirmation_rate, delivery_rate, ad_spend_usd, cpr_usd || calculatedCpr, clicks || 0, selling_price_dzd, product_cost_dzd, notes, product_id, campaign_quantity || 0]
     );
     res.status(201).json(result.rows[0]);
   } catch (err) {
